@@ -1,4 +1,4 @@
-<img width="500" height="500" alt="Image" src="https://github.com/user-attachments/assets/e9241822-1e52-4e2d-a02f-2cf46e26bc2f" />
+<img width="500" height="500" alt="AppLocker INSPECTOR" src="https://github.com/user-attachments/assets/b14b6796-d1ef-47a8-aff2-ad6b4bb9c5e1" />
 
 ```
     _                _               _               ___                           _             
