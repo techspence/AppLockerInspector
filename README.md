@@ -50,8 +50,57 @@ AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigure
 Save the script as `Invoke-AppLockerInspector.ps1`. You can dot-source it or call it directly.
 
 ```powershell
-# From the folder where you saved it
-. .\Invoke-AppLockerInspector.ps1     # dot-source once per session
+# dot-source from the folder where you saved it
+. .\Invoke-AppLockerInspector.ps1
 
 # Or call directly as a script file
 powershell -ExecutionPolicy Bypass -File .\Invoke-AppLockerInspector.ps1
+```
+
+## Quick Start
+Audit the local effective policy (no arguments)
+
+Exports %TEMP%\AppLockerPolicy-<COMPUTERNAME>-yyyyMMdd-HHmmss.xml and audits it.
+
+```powershell
+Invoke-AppLockerInspector -Verbose | Format-Table -Auto
+
+# Save the exported policy to a specific path
+Invoke-AppLockerInspector -OutPolicyXml C:\Reports\Effective-AppLocker.xml -Verbose
+
+# Audit a specific XML export
+Invoke-AppLockerInspector -Path .\applocker.xml
+
+# Include UNC share permission checks
+# Use current credentials
+Invoke-AppLockerInspector -Path .\applocker.xml -TestSharePermissions
+
+# Use alternate credentials for remote servers
+Invoke-AppLockerInspector -Path .\applocker.xml -TestSharePermissions -Credential (Get-Credential)
+
+Export findings
+# CSV
+Invoke-AppLockerInspector -Path .\applocker.xml -OutCsv .\findings.csv
+
+# JSON
+Invoke-AppLockerInspector -Path .\applocker.xml -AsJson | Out-File .\findings.json -Encoding utf8
+```
+
+| Parameter              | Type           | Required | Description                                                                                                                                 |
+| ---------------------- | -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Path`                 | `string`       |          | Path to an AppLocker XML export. **If omitted**, the tool calls `Get-AppLockerPolicy -Effective -Xml`, saves it, and audits that.           |
+| `OutPolicyXml`         | `string`       |          | Where to save the generated effective policy when `-Path` is omitted. Default: `%TEMP%\AppLockerPolicy-<COMPUTERNAME>-yyyyMMdd-HHmmss.xml`. |
+| `TestSharePermissions` | `switch`       |          | Check **share ACLs** for UNC paths (and **NTFS** on the UNC target). Requires rights/connectivity to file servers.                          |
+| `Credential`           | `PSCredential` |          | Credentials for remote share ACL queries when `-TestSharePermissions` is used.                                                              |
+| `AsJson`               | `switch`       |          | Emit findings as JSON.                                                                                                                      |
+| `OutCsv`               | `string`       |          | Export findings to CSV.                                                                                                                     |
+
+## Example output
+
+```PowerShell
+Severity Collection RuleType     Action Principal             RuleName                      ConditionType Condition                                   Reason                                                     Recommendation
+-------- ---------- --------     ------ ---------             --------                      ------------- ---------                                   ------                                                     --------------
+High     EXE        FilePathRule Allow  Everyone              Temp EXEs                     Path          C:\Temp\*.exe                                Temp folders are user-writable; Principal is broad…        Avoid user-writable paths; replace with Publisher/Hash…
+Info     Script     FilePathRule Allow  Everyone              CreateTeamsFirewallRule.ps1   Path          C:\Program Files\Acme\Scripts\Create…        Broad principal allowed, but target is protected & RO…    No change needed; consider Publisher/Hash for defense…
+High     DLL        (collection)  n/a   n/a                   n/a                           n/a           n/a                                         Collection 'DLL' is NotConfigured → default allow…       Set EnforcementMode='Enabled' (or 'AuditOnly' during…
+```
