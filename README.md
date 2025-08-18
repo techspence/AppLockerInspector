@@ -77,7 +77,7 @@ Invoke-AppLockerInspector -Path .\applocker.xml -TestSharePermissions
 # Use alternate credentials for remote servers
 Invoke-AppLockerInspector -Path .\applocker.xml -TestSharePermissions -Credential (Get-Credential)
 
-Export findings
+# Export findings
 # CSV
 Invoke-AppLockerInspector -Path .\applocker.xml -OutCsv .\findings.csv
 
