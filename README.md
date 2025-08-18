@@ -8,6 +8,7 @@
 /_/   \_\ .__/| .__/|_____\___/ \___|_|\_\___|_|    |___|_| |_|___/ .__/ \___|\___|\__\___/|_|   
         |_|   |_|                                                 |_|                                   
 		By: Spencer Alessi (@techspence)
+		Version 0.1
 ```
 
 AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigured/risky settings, including actual ACL checks. If you don’t provide a policy file, the tool will **export the local effective AppLocker policy** and analyze that automatically.
