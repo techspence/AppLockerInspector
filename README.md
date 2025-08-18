@@ -1,10 +1,18 @@
 # AppLocker Inspector
 
+    _                _               _               ___                           _             
+   / \   _ __  _ __ | |    ___   ___| | _____ _ __  |_ _|_ __  ___ _ __   ___  ___| |_ ___  _ __ 
+  / _ \ | '_ \| '_ \| |   / _ \ / __| |/ / _ \ '__|  | || '_ \/ __| '_ \ / _ \/ __| __/ _ \| '__|
+ / ___ \| |_) | |_) | |__| (_) | (__|   <  __/ |     | || | | \__ \ |_) |  __/ (__| || (_) | |   
+/_/   \_\ .__/| .__/|_____\___/ \___|_|\_\___|_|    |___|_| |_|___/ .__/ \___|\___|\__\___/|_|   
+        |_|   |_|                                                 |_|                            
+		By: Spencer Alessi (@techspence)
+
 AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigured/risky settings, including actual ACL checks. If you don’t provide a policy file, the tool will **export the local effective AppLocker policy** and analyze that automatically.
 
 
 
-## ✨ Features
+## Features
 
 - **Policy acquisition**
   - If `-Path` is omitted, collects the **local effective** policy via `Get-AppLockerPolicy -Effective -Xml`, saves it to disk, and audits it.
@@ -25,7 +33,7 @@ AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigure
 
 
 
-## 📦 Requirements
+## Requirements
 
 - **PowerShell:** Windows PowerShell **5.1+** (compatible) or PowerShell **7.x**.
 - **OS:** Windows 10/11 or Windows Server with AppLocker available.
@@ -35,7 +43,7 @@ AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigure
 
 
 
-## 🔧 Installation
+## Installation
 
 Save the script as `Invoke-AppLockerInspector.ps1`. You can dot-source it or call it directly.
 
