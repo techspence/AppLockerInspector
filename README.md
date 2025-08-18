@@ -1,12 +1,12 @@
 # AppLocker Inspector
 
 ```
-    _                _               _               ___                           _             
+    _      _     _     ___       _   
    / \   _ __  _ __ | |    ___   ___| | _____ _ __  |_ _|_ __  ___ _ __   ___  ___| |_ ___  _ __ 
-  / _ \ | '_ \| '_ \| |   / _ \ / __| |/ / _ \ '__|  | || '_ \/ __| '_ \ / _ \/ __| __/ _ \| '__|
- / ___ \| |_) | |_) | |__| (_) | (__|   <  __/ |     | || | | \__ \ |_) |  __/ (__| || (_) | |   
+  / _ \ | '_ \| '_ \| |   / _ \ / __| |/ / _ \ '__|  |  '_ \/ __| '_ \ / _ \/ __| __/ _ \| '__|
+ / ___ \| |_) | |_) | |__| (_) | (__|   <  __/ |     |  | | \__ \ |_) |  __/ (__|  (_) | |   
 /_/   \_\ .__/| .__/|_____\___/ \___|_|\_\___|_|    |___|_| |_|___/ .__/ \___|\___|\__\___/|_|   
-        |_|   |_|                                                 |_|                            
+        |_|   |_|         |_|        
 		By: Spencer Alessi (@techspence)
 ```
 
@@ -58,11 +58,10 @@ powershell -ExecutionPolicy Bypass -File .\Invoke-AppLockerInspector.ps1
 ```
 
 ## Quick Start
-Audit the local effective policy (no arguments)
-
-Exports %TEMP%\AppLockerPolicy-<COMPUTERNAME>-yyyyMMdd-HHmmss.xml and audits it.
 
 ```powershell
+# Audit the local effective policy (no arguments)
+# Exports %TEMP%\AppLockerPolicy-<COMPUTERNAME>-yyyyMMdd-HHmmss.xml and audits it.
 Invoke-AppLockerInspector -Verbose | Format-Table -Auto
 
 # Save the exported policy to a specific path
@@ -86,21 +85,22 @@ Invoke-AppLockerInspector -Path .\applocker.xml -OutCsv .\findings.csv
 Invoke-AppLockerInspector -Path .\applocker.xml -AsJson | Out-File .\findings.json -Encoding utf8
 ```
 
-| Parameter              | Type           | Required | Description                                                                                                                                 |
-| ---------------------- | -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Path`                 | `string`       |          | Path to an AppLocker XML export. **If omitted**, the tool calls `Get-AppLockerPolicy -Effective -Xml`, saves it, and audits that.           |
-| `OutPolicyXml`         | `string`       |          | Where to save the generated effective policy when `-Path` is omitted. Default: `%TEMP%\AppLockerPolicy-<COMPUTERNAME>-yyyyMMdd-HHmmss.xml`. |
-| `TestSharePermissions` | `switch`       |          | Check **share ACLs** for UNC paths (and **NTFS** on the UNC target). Requires rights/connectivity to file servers.                          |
-| `Credential`           | `PSCredential` |          | Credentials for remote share ACL queries when `-TestSharePermissions` is used.                                                              |
-| `AsJson`               | `switch`       |          | Emit findings as JSON.                                                                                                                      |
-| `OutCsv`               | `string`       |          | Export findings to CSV.                                                                                                                     |
+| Parameter | Type | Description |
+|---------- | ---- | ----------- | 
+| `Path` | `string` | Path to an AppLocker XML export. **If omitted**, the tool calls `Get-AppLockerPolicy -Effective -Xml`, saves it, and audits that. |
+| `OutPolicyXml` | `string` | Where to save the generated effective policy when `-Path` is omitted. Default: `%TEMP%\AppLockerPolicy-<COMPUTERNAME>-yyyyMMdd-HHmmss.xml`. |
+| `TestSharePermissions` | `switch` | Check **share ACLs** for UNC paths (and **NTFS** on the UNC target). Requires rights/connectivity to file servers. |
+| `Credential` | `PSCredential` | Credentials for remote share ACL queries when `-TestSharePermissions` is used. |
+| `AsJson`     | `switch` | Emit findings as JSON. |
+| `OutCsv`     | `string` | Export findings to CSV. |
 
 ## Example output
 
 ```PowerShell
-Severity Collection RuleType     Action Principal             RuleName                      ConditionType Condition                                   Reason                                                     Recommendation
--------- ---------- --------     ------ ---------             --------                      ------------- ---------                                   ------                                                     --------------
-High     EXE        FilePathRule Allow  Everyone              Temp EXEs                     Path          C:\Temp\*.exe                                Temp folders are user-writable; Principal is broad…        Avoid user-writable paths; replace with Publisher/Hash…
-Info     Script     FilePathRule Allow  Everyone              CreateTeamsFirewallRule.ps1   Path          C:\Program Files\Acme\Scripts\Create…        Broad principal allowed, but target is protected & RO…    No change needed; consider Publisher/Hash for defense…
-High     DLL        (collection)  n/a   n/a                   n/a                           n/a           n/a                                         Collection 'DLL' is NotConfigured → default allow…       Set EnforcementMode='Enabled' (or 'AuditOnly' during…
+Severity Collection RuleType     Action Principal   RuleName  ConditionType Condition     Reason   Recommendation
+-------- ---------- --------     ------ ---------   --------  ------------- ---------     ------   --------------
+High     EXE        FilePathRule Allow  Everyone    Temp EXEs PathC:\Temp\*.exe  Temp folders are user-writable; Principal is broad…        Avoid user-writable paths; replace with Publisher/Hash…
+Info     Script     FilePathRule Allow  Everyone    CreateTeamsFirewallRule.ps1   PathC:\Program Files\Acme\Scripts\Create…        Broad principal allowed, but target is protected & RO…    No change needed; consider Publisher/Hash for defense…
+High     DLL        (collection)  n/a   n/a         n/a       n/a n/a Collection 'DLL' is NotConfigured → default allow…       Set EnforcementMode='Enabled' (or 'AuditOnly' during…
 ```
+
