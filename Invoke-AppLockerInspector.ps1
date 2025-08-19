@@ -961,7 +961,10 @@ function New-HtmlReport {
   / _ \ | '_ \| '_ \| |   / _ \ / __| |/ / _ \ '__|  | || '_ \/ __| '_ \ / _ \/ __| __/ _ \| '__|
  / ___ \| |_) | |_) | |__| (_) | (__|   <  __/ |     | || | | \__ \ |_) |  __/ (__| || (_) | |   
 /_/   \_\ .__/| .__/|_____\___/ \___|_|\_\___|_|    |___|_| |_|___/ .__/ \___|\___|\__\___/|_|   
-        |_|   |_|                                                 |_|                         </div>
+        |_|   |_|                                                 |_|                         
+        By: Spencer Alessi @techspence
+        Report Template: Michael Haag @mhaggis
+                </div>
                 <h1 class="title">AppLocker Inspector Report</h1>
                 <p class="subtitle">Security Policy Analysis & Recommendations</p>
                 <p>Generated on: $timestamp</p>
