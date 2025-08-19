@@ -32,6 +32,9 @@
 .PARAMETER OutCsv
   Export findings to CSV.
 
+.PARAMETER OutHtml
+  Export findings to HTML report.
+
 .NOTES
   - Share ACL queries require appropriate rights on the file server and open firewalls.
   - Group expansion is heuristic for broad groups; deep nested group evaluation is out of scope.
@@ -50,7 +53,9 @@ param(
 
   [switch]$AsJson,
 
-  [string]$OutCsv
+  [string]$OutCsv,
+
+  [string]$OutHtml
 )
 
 # ----------------------------- Helpers ------------------------------------
@@ -419,6 +424,802 @@ function Resolve-BroadPrincipalNames {
   $names | Select-Object -Unique
 }
 
+# ----- HTML Report Generation -----
+
+# Load required assemblies for HTML encoding
+Add-Type -AssemblyName System.Web
+
+function Get-SecurityInsights {
+  param([array]$Results)
+  
+  $insights = @{}
+  
+  # Check for dangerous wildcard rules
+  $dangerousWildcards = $Results | Where-Object { 
+    $_.ConditionType -eq 'Path' -and 
+    $_.Condition -and 
+    ($_.Condition -match '\*\.?\*' -or $_.Condition -match '^[A-Z]:\\?\*' -or $_.Condition -match '%PROGRAMFILES%\\?\*' -or $_.Condition -match '%WINDIR%\\?\*')
+  }
+  $insights['dangerousWildcards'] = $dangerousWildcards.Count
+  
+  # Check for UNC paths
+  $uncPaths = $Results | Where-Object { 
+    $_.ConditionType -eq 'Path' -and 
+    $_.Condition -and 
+    $_.Condition -match '^\\\\' 
+  }
+  $insights['uncPaths'] = $uncPaths.Count
+  
+  # Check for user-writable paths
+  $userWritablePaths = $Results | Where-Object { 
+    $_.Reason -and 
+    ($_.Reason -match '(?i)(user.writable|appdata|temp|downloads|desktop|documents)' -or 
+     $_.Reason -match '(?i)(broad principal|everyone)')
+  }
+  $insights['userWritablePaths'] = $userWritablePaths.Count
+  
+  # Check for broad principals
+  $broadPrincipals = $Results | Where-Object { 
+    $_.Principal -and 
+    ($_.Principal -match '(?i)(everyone|authenticated users|users)' -or $_.Reason -match '(?i)broad.*principal')
+  }
+  $insights['broadPrincipals'] = $broadPrincipals.Count
+  
+  # Check for enforcement issues
+  $enforcementIssues = $Results | Where-Object { 
+    $_.Reason -and 
+    ($_.Reason -match '(?i)(notconfigured|auditonly|default.allow)' -or $_.RuleType -eq '(collection)')
+  }
+  $insights['enforcementIssues'] = $enforcementIssues.Count
+  
+  return $insights
+}
+
+function New-HtmlReport {
+  param(
+    [array]$Results,
+    [string]$OutputPath
+  )
+  
+  Write-Verbose "New-HtmlReport called with $($Results.Count) results"
+  Write-Verbose "Output path: $OutputPath"
+  
+  $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+  $totalFindings = $Results.Count
+  $highSeverity = ($Results | Where-Object { $_.Severity -eq 'High' }).Count
+  $mediumSeverity = ($Results | Where-Object { $_.Severity -eq 'Medium' }).Count
+  $lowSeverity = ($Results | Where-Object { $_.Severity -eq 'Low' }).Count
+  $infoSeverity = ($Results | Where-Object { $_.Severity -eq 'Info' }).Count
+  
+  $collections = ($Results | Select-Object -ExpandProperty Collection -Unique | Sort-Object) -join ', '
+  $insights = Get-SecurityInsights -Results $Results
+  
+  $htmlHeader = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AppLocker Inspector Report</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #2c3e50;
+            --header-bg: #34495e;
+            --header-text: #ffffff;
+            --table-border: #bdc3c7;
+            --table-hover: #ecf0f1;
+            --high-severity: #e74c3c;
+            --medium-severity: #f39c12;
+            --low-severity: #f1c40f;
+            --info-severity: #3498db;
+            --success-color: #27ae60;
+            --card-bg: #f8f9fa;
+            --shadow: rgba(0,0,0,0.1);
+            --warning-color: #e67e22;
+            --danger-bg: #fdf2f2;
+            --warning-bg: #fef9e7;
+            --info-bg: #f0f9ff;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            transition: all 0.3s ease;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, var(--header-bg), #2c3e50);
+            color: var(--header-text);
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px var(--shadow);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="75" cy="75" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+            opacity: 0.1;
+        }
+        
+        .header-content {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .ascii-art {
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            white-space: pre;
+            margin-bottom: 20px;
+            opacity: 0.8;
+        }
+        
+        .title {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+        
+        .security-insights {
+            background: var(--danger-bg);
+            border-left: 5px solid var(--high-severity);
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px var(--shadow);
+        }
+        
+        .security-insights h2 {
+            color: var(--high-severity);
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .security-insights h2::before {
+            content: "⚠️";
+            font-size: 1.2em;
+        }
+        
+        .insights-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .insight-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid var(--warning-color);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .insight-card.critical {
+            border-left-color: var(--high-severity);
+        }
+        
+        .insight-card h3 {
+            color: var(--text-color);
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        
+        .insight-card p {
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+        
+        .insight-impact {
+            background: var(--warning-bg);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: #8b5a2b;
+            font-weight: 500;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: var(--card-bg);
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px var(--shadow);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border-left: 5px solid transparent;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px var(--shadow);
+        }
+        
+        .stat-card.high { border-left-color: var(--high-severity); }
+        .stat-card.medium { border-left-color: var(--medium-severity); }
+        .stat-card.low { border-left-color: var(--low-severity); }
+        .stat-card.info { border-left-color: var(--info-severity); }
+        .stat-card.total { border-left-color: var(--success-color); }
+        
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 1.1em;
+            opacity: 0.8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .filters {
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .filter-group label {
+            font-weight: 600;
+            min-width: 80px;
+        }
+        
+        select, input {
+            padding: 8px 12px;
+            border: 2px solid var(--table-border);
+            border-radius: 6px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+        
+        select:focus, input:focus {
+            outline: none;
+            border-color: var(--info-severity);
+        }
+        
+        .table-container {
+            background: var(--card-bg);
+            border-radius: 12px;
+            overflow: auto;
+            box-shadow: 0 4px 15px var(--shadow);
+            margin-bottom: 30px;
+            max-width: 100%;
+            /* Enable horizontal scrolling */
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: 80vh;
+        }
+        
+        table {
+            width: 100%;
+            min-width: 1800px; /* Much wider to accommodate content */
+            border-collapse: collapse;
+            font-size: 14px;
+            table-layout: fixed; /* Fixed layout for better control */
+        }
+        
+        th {
+            background: var(--header-bg);
+            color: var(--header-text);
+            padding: 15px 12px;
+            text-align: left;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.3s ease;
+            white-space: nowrap;
+        }
+        
+        /* Column width optimization - much more generous */
+        th:nth-child(1) { width: 90px; }    /* Severity */
+        th:nth-child(2) { width: 120px; }   /* Collection */
+        th:nth-child(3) { width: 120px; }   /* Rule Type */
+        th:nth-child(4) { width: 80px; }    /* Action */
+        th:nth-child(5) { width: 130px; }   /* Principal */
+        th:nth-child(6) { width: 200px; }   /* Rule Name */
+        th:nth-child(7) { width: 120px; }   /* Condition Type */
+        th:nth-child(8) { width: 250px; }   /* Condition */
+        th:nth-child(9) { width: 400px; }   /* Reason - Much wider */
+        th:nth-child(10) { width: 400px; }  /* Recommendation - Much wider */
+        
+        th:hover {
+            background: #2c3e50;
+        }
+        
+        th.sort-asc::after { content: ' ↑'; }
+        th.sort-desc::after { content: ' ↓'; }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--table-border);
+            vertical-align: top;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+        
+        /* Match column widths for td elements */
+        td:nth-child(1) { width: 90px; }
+        td:nth-child(2) { width: 120px; }
+        td:nth-child(3) { width: 120px; }
+        td:nth-child(4) { width: 80px; }
+        td:nth-child(5) { width: 130px; }
+        td:nth-child(6) { width: 200px; }
+        td:nth-child(7) { width: 120px; }
+        td:nth-child(8) { width: 250px; }
+        td:nth-child(9) { width: 400px; }   /* Reason - Much wider */
+        td:nth-child(10) { width: 400px; }  /* Recommendation - Much wider */
+        
+        tr:hover {
+            background-color: var(--table-hover);
+        }
+        
+        .severity-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+        }
+        
+        .severity-high { background: var(--high-severity); }
+        .severity-medium { background: var(--medium-severity); }
+        .severity-low { background: var(--low-severity); }
+        .severity-info { background: var(--info-severity); }
+        
+        .expandable {
+            line-height: 1.4;
+            word-wrap: break-word;
+            hyphens: auto;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        /* Only truncate if content is REALLY long (more than 8 lines) */
+        .expandable:not(.expanded) {
+            max-height: 140px; /* Allow about 8-9 lines before truncating */
+            overflow: hidden;
+            position: relative;
+        }
+        
+        /* Add fade effect for truncated content */
+        .expandable:not(.expanded)::after {
+            content: "";
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 20px;
+            background: linear-gradient(transparent, var(--card-bg));
+            pointer-events: none;
+        }
+        
+        .expandable.expanded {
+            max-height: none;
+            word-wrap: break-word;
+        }
+        
+        .expandable:hover {
+            background-color: rgba(52, 152, 219, 0.05);
+            border-radius: 4px;
+        }
+        
+        /* Visual indicator for expandable content */
+        .expandable:not(.expanded):hover::before {
+            content: "Click to expand...";
+            position: absolute;
+            bottom: 2px;
+            right: 4px;
+            background: var(--info-severity);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            z-index: 5;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 30px;
+            color: var(--text-color);
+            opacity: 0.7;
+            border-top: 1px solid var(--table-border);
+            margin-top: 40px;
+        }
+        
+        /* Scroll indicator */
+        .table-container::after {
+            content: "← Scroll horizontally to see all columns →";
+            position: sticky;
+            left: 0;
+            bottom: 0;
+            background: var(--header-bg);
+            color: var(--header-text);
+            padding: 8px;
+            text-align: center;
+            font-size: 12px;
+            opacity: 0.8;
+            border-top: 1px solid var(--table-border);
+        }
+        
+        @media (max-width: 768px) {
+            .container { padding: 10px; }
+            .title { font-size: 2em; }
+            .stats-grid { grid-template-columns: 1fr; }
+            .insights-grid { grid-template-columns: 1fr; }
+            .insight-card { margin-bottom: 15px; }
+            .filters { flex-direction: column; align-items: stretch; }
+            
+            table { 
+                font-size: 12px;
+                min-width: 1400px; /* Wider minimum for mobile horizontal scroll */
+            }
+            
+            th, td { 
+                padding: 6px 8px;
+                font-size: 11px;
+            }
+            
+            /* Adjust column widths for mobile - still generous */
+            th:nth-child(1), td:nth-child(1) { width: 70px; }
+            th:nth-child(2), td:nth-child(2) { width: 100px; }
+            th:nth-child(3), td:nth-child(3) { width: 100px; }
+            th:nth-child(4), td:nth-child(4) { width: 70px; }
+            th:nth-child(5), td:nth-child(5) { width: 110px; }
+            th:nth-child(6), td:nth-child(6) { width: 150px; }
+            th:nth-child(7), td:nth-child(7) { width: 100px; }
+            th:nth-child(8), td:nth-child(8) { width: 200px; }
+            th:nth-child(9), td:nth-child(9) { width: 300px; }
+            th:nth-child(10), td:nth-child(10) { width: 300px; }
+        }
+        
+        /* Large screen optimization */
+        @media (min-width: 1600px) {
+            .table-container {
+                max-height: 85vh;
+            }
+            
+            table {
+                min-width: 2000px; /* Even wider for large screens */
+            }
+            
+            /* Give even more space to important columns on large screens */
+            th:nth-child(8), td:nth-child(8) { width: 300px; }    /* Condition */
+            th:nth-child(9), td:nth-child(9) { width: 450px; }    /* Reason */
+            th:nth-child(10), td:nth-child(10) { width: 450px; }  /* Recommendation */
+        }
+        
+        /* Ultra-wide screen optimization */
+        @media (min-width: 2000px) {
+            table {
+                min-width: 2400px;
+            }
+            
+            th:nth-child(9), td:nth-child(9) { width: 500px; }
+            th:nth-child(10), td:nth-child(10) { width: 500px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <div class="ascii-art">    _                _               _               ___                           _             
+   / \   _ __  _ __ | |    ___   ___| | _____ _ __  |_ _|_ __  ___ _ __   ___  ___| |_ ___  _ __ 
+  / _ \ | '_ \| '_ \| |   / _ \ / __| |/ / _ \ '__|  | || '_ \/ __| '_ \ / _ \/ __| __/ _ \| '__|
+ / ___ \| |_) | |_) | |__| (_) | (__|   <  __/ |     | || | | \__ \ |_) |  __/ (__| || (_) | |   
+/_/   \_\ .__/| .__/|_____\___/ \___|_|\_\___|_|    |___|_| |_|___/ .__/ \___|\___|\__\___/|_|   
+        |_|   |_|                                                 |_|                         </div>
+                <h1 class="title">AppLocker Inspector Report</h1>
+                <p class="subtitle">Security Policy Analysis & Recommendations</p>
+                <p>Generated on: $timestamp</p>
+                <p>Collections Analyzed: $collections</p>
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="stat-number">$totalFindings</div>
+                <div class="stat-label">Total Findings</div>
+            </div>
+            <div class="stat-card high">
+                <div class="stat-number">$highSeverity</div>
+                <div class="stat-label">High Severity</div>
+            </div>
+            <div class="stat-card medium">
+                <div class="stat-number">$mediumSeverity</div>
+                <div class="stat-label">Medium Severity</div>
+            </div>
+            <div class="stat-card low">
+                <div class="stat-number">$lowSeverity</div>
+                <div class="stat-label">Low Severity</div>
+            </div>
+            <div class="stat-card info">
+                <div class="stat-number">$infoSeverity</div>
+                <div class="stat-label">Info</div>
+            </div>
+        </div>
+        
+        <div class="security-insights">
+            <h2>🚨 Critical Security Insights</h2>
+            <p>Based on our analysis of your AppLocker policy, here are the most important security considerations:</p>
+            
+            <div class="insights-grid">
+                <div class="insight-card critical">
+                    <h3>🏛️ User-Mode Enforcement Limitations</h3>
+                    <p>AppLocker operates in user-mode, which makes it more vulnerable to bypass techniques compared to kernel-level solutions like Windows Defender Application Control (WDAC). Consider WDAC for enhanced security requirements.</p>
+                    <div class="insight-impact">
+                        <strong>Impact:</strong> User-mode enforcement can be bypassed through various techniques including DLL injection, process hollowing, and PowerShell execution policy bypasses. WDAC provides kernel-level protection that's significantly harder to circumvent.
+                    </div>
+                </div>
+                
+                <div class="insight-card critical">
+                    <h3>⚡ Dangerous Wildcard Rules ($($insights['dangerousWildcards']) found)</h3>
+                    <p>Rules using patterns like *, *.*, %PROGRAMFILES%\\*, or C:\\* are extremely dangerous as they effectively disable application control for large parts of the filesystem.</p>
+                    <div class="insight-impact">
+                        <strong>Impact:</strong> These patterns create massive security gaps that attackers can easily exploit by placing malicious files in allowed locations.
+                    </div>
+                </div>
+                
+                <div class="insight-card critical">
+                    <h3>🌐 Network Path Vulnerabilities ($($insights['uncPaths']) found)</h3>
+                    <p>Rules allowing execution from UNC/network paths (\\\\server\\share) create security risks as network shares may be compromised or hijacked by attackers.</p>
+                    <div class="insight-impact">
+                        <strong>Impact:</strong> Attackers can compromise network shares or perform SMB relay attacks to execute malicious code through these rules.
+                    </div>
+                </div>
+                
+                <div class="insight-card">
+                    <h3>📂 User-Writable Directory Rules ($($insights['userWritablePaths']) found)</h3>
+                    <p>Rules allowing execution from user-writable directories (AppData, Temp, Downloads, etc.) are primary targets for malware persistence and are used in 70% of successful endpoint compromises.</p>
+                    <div class="insight-impact">
+                        <strong>Impact:</strong> Malware commonly uses these locations for persistence and lateral movement within your environment.
+                    </div>
+                </div>
+                
+                <div class="insight-card">
+                    <h3>🔐 Broad Principal Assignments ($($insights['broadPrincipals']) found)</h3>
+                    <p>Rules assigned to "Everyone", "Authenticated Users", or "Users" groups may be overly broad and could impact system security and administrative functions.</p>
+                    <div class="insight-impact">
+                        <strong>Impact:</strong> Overly broad assignments can prevent legitimate administrative tasks and make it harder to implement principle of least privilege.
+                    </div>
+                </div>
+                
+                <div class="insight-card">
+                    <h3>🚀 Consider WDAC for Enhanced Security</h3>
+                    <p>For organizations requiring maximum security, Windows Defender Application Control (WDAC) offers kernel-level enforcement, better performance, and modern application support that complements or can replace AppLocker.</p>
+                    <div class="insight-impact">
+                        <strong>Benefit:</strong> WDAC provides kernel-level protection, better performance with intelligent caching, support for modern app types (MSIX/UWP), and integration with Microsoft security stack.
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="filters">
+            <div class="filter-group">
+                <label>Severity:</label>
+                <select id="severityFilter" onchange="filterTable()">
+                    <option value="">All</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                    <option value="Info">Info</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Collection:</label>
+                <select id="collectionFilter" onchange="filterTable()">
+                    <option value="">All</option>
+"@
+
+  $uniqueCollections = $Results | Select-Object -ExpandProperty Collection -Unique | Sort-Object
+  foreach ($collection in $uniqueCollections) {
+    $htmlHeader += "                    <option value=`"$collection`">$collection</option>`n"
+  }
+
+  $htmlHeader += @"
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Search:</label>
+                <input type="text" id="searchInput" placeholder="Search in findings..." onkeyup="filterTable()">
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table id="findingsTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)">Severity</th>
+                        <th onclick="sortTable(1)">Collection</th>
+                        <th onclick="sortTable(2)">Rule Type</th>
+                        <th onclick="sortTable(3)">Action</th>
+                        <th onclick="sortTable(4)">Principal</th>
+                        <th onclick="sortTable(5)">Rule Name</th>
+                        <th onclick="sortTable(6)">Condition Type</th>
+                        <th onclick="sortTable(7)">Condition</th>
+                        <th onclick="sortTable(8)">Reason</th>
+                        <th onclick="sortTable(9)">Recommendation</th>
+                    </tr>
+                </thead>
+                <tbody>
+"@
+
+  $htmlRows = ""
+  foreach ($result in $Results) {
+    $severityClass = "severity-$($result.Severity.ToLower())"
+    $htmlRows += @"
+                    <tr>
+                        <td><span class="severity-badge $severityClass">$($result.Severity)</span></td>
+                        <td>$([System.Web.HttpUtility]::HtmlEncode($result.Collection))</td>
+                        <td>$([System.Web.HttpUtility]::HtmlEncode($result.RuleType))</td>
+                        <td>$([System.Web.HttpUtility]::HtmlEncode($result.Action))</td>
+                        <td>$([System.Web.HttpUtility]::HtmlEncode($result.Principal))</td>
+                        <td>$([System.Web.HttpUtility]::HtmlEncode($result.RuleName))</td>
+                        <td>$([System.Web.HttpUtility]::HtmlEncode($result.ConditionType))</td>
+                        <td class="expandable" onclick="toggleExpand(this)">$([System.Web.HttpUtility]::HtmlEncode($result.Condition))</td>
+                        <td class="expandable" onclick="toggleExpand(this)">$([System.Web.HttpUtility]::HtmlEncode($result.Reason))</td>
+                        <td class="expandable" onclick="toggleExpand(this)">$([System.Web.HttpUtility]::HtmlEncode($result.Recommendation))</td>
+                    </tr>
+"@
+  }
+
+  $htmlFooter = @"
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <p>AppLocker Inspector v0.1 | Generated by ApplockerInspector</p>
+            <p>For more information and updates, visit the <a href="https://github.com/techspence/applockerinspector" target="_blank" rel="noopener noreferrer">project repository</a></p>
+        </div>
+    </div>
+
+    <script>
+        let sortDirection = {};
+        
+        function sortTable(columnIndex) {
+            const table = document.getElementById('findingsTable');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const th = table.querySelectorAll('th')[columnIndex];
+            
+            // Clear other sort indicators
+            table.querySelectorAll('th').forEach(header => {
+                header.classList.remove('sort-asc', 'sort-desc');
+            });
+            
+            const isAscending = !sortDirection[columnIndex];
+            sortDirection[columnIndex] = isAscending;
+            
+            rows.sort((a, b) => {
+                const cellA = a.cells[columnIndex].textContent.trim();
+                const cellB = b.cells[columnIndex].textContent.trim();
+                
+                // Special handling for severity
+                if (columnIndex === 0) {
+                    const severityOrder = { 'HIGH': 4, 'MEDIUM': 3, 'LOW': 2, 'INFO': 1 };
+                    const valueA = severityOrder[cellA.toUpperCase()] || 0;
+                    const valueB = severityOrder[cellB.toUpperCase()] || 0;
+                    return isAscending ? valueA - valueB : valueB - valueA;
+                }
+                
+                return isAscending ? cellA.localeCompare(cellB) : cellB.localeCompare(cellA);
+            });
+            
+            rows.forEach(row => tbody.appendChild(row));
+            th.classList.add(isAscending ? 'sort-asc' : 'sort-desc');
+        }
+        
+        function filterTable() {
+            const severityFilter = document.getElementById('severityFilter').value.toLowerCase();
+            const collectionFilter = document.getElementById('collectionFilter').value.toLowerCase();
+            const searchInput = document.getElementById('searchInput').value.toLowerCase();
+            const table = document.getElementById('findingsTable');
+            const rows = table.querySelectorAll('tbody tr');
+            
+            rows.forEach(row => {
+                const severity = row.cells[0].textContent.toLowerCase();
+                const collection = row.cells[1].textContent.toLowerCase();
+                const rowText = row.textContent.toLowerCase();
+                
+                const severityMatch = !severityFilter || severity.includes(severityFilter);
+                const collectionMatch = !collectionFilter || collection.includes(collectionFilter);
+                const searchMatch = !searchInput || rowText.includes(searchInput);
+                
+                row.style.display = severityMatch && collectionMatch && searchMatch ? '' : 'none';
+            });
+        }
+        
+        function toggleExpand(element) {
+            element.classList.toggle('expanded');
+        }
+        
+        // Initialize table with default sort by severity
+        document.addEventListener('DOMContentLoaded', function() {
+            sortTable(0);
+        });
+    </script>
+</body>
+</html>
+"@
+
+  Write-Verbose "Building final HTML content..."
+  $htmlContent = $htmlHeader + $htmlRows + $htmlFooter
+  Write-Verbose "HTML content length: $($htmlContent.Length) characters"
+  
+  try {
+    Write-Verbose "Writing HTML file to: $OutputPath"
+    $htmlContent | Out-File -FilePath $OutputPath -Encoding UTF8
+    Write-Verbose "HTML report generated at: $OutputPath"
+    
+    # Verify the file was written
+    if (Test-Path -LiteralPath $OutputPath) {
+      Write-Verbose "File verification successful"
+      return $true
+    } else {
+      Write-Warning "File was not created despite no errors"
+      return $false
+    }
+  } catch {
+    Write-Warning "Failed to generate HTML report: $($_.Exception.Message)"
+    Write-Verbose "Full error details: $($_.Exception.ToString())"
+    return $false
+  }
+}
+
 # ----------------------------- Acquire / Parse XML ----------------------------------
 
 Get-Art 0.1
@@ -559,6 +1360,12 @@ foreach ($col in $collections) {
         if ($isBroad -and -not $isAdmin) {
           $reasons += "Principal is broad (Everyone/Authenticated Users/Users)"
           $rec     += "Restrict the principal to a minimal, purpose-built group."
+          $score = [Math]::Max($score, $SeverityScore['Medium'])
+        }
+        # Check for any wildcard in path (covers *, ?, and other patterns)
+        if ($condText -match '[\*\?]' -and -not ($reasons | Where-Object { $_ -match 'Wildcard' })) {
+          $reasons += "Path contains wildcards allowing broader execution than intended"
+          $rec     += "Use specific file paths or Publisher rules instead of wildcards."
           $score = [Math]::Max($score, $SeverityScore['Medium'])
         }
         if ($exceptionCount -gt 0 -and $score -gt 0) { $score -= 1 }
@@ -797,6 +1604,31 @@ foreach ($col in $collections) {
         }) )
       }
     }
+    
+    # ---- Ensure ALL findings with issues are emitted, even if they don't meet above criteria ----
+    elseif ($condType -eq 'Path' -and $reasons.Count -gt 0) {
+      # This catches cases where we found issues but didn't meet the specific criteria above
+      $sev = if ($score -ge 0) {
+        ($SeverityScore.GetEnumerator() | Sort-Object Value -Descending | Where-Object { $_.Value -le $score } | Select-Object -First 1).Key
+      } else {
+        'Medium'  # Default severity for path issues
+      }
+      if (-not $sev) { 
+        $sev = 'Medium' 
+      }
+      
+      $results.Add( (New-Finding -Severity $sev -Props @{
+        Collection=$colType
+        RuleType=$ruleType
+        Action=$action
+        Principal=$principalN
+        RuleName=[string]$r.Name
+        ConditionType=$condType
+        Condition=$condText
+        Reason=($reasons -join '; ')
+        Recommendation=(($rec | Select-Object -Unique) -join ' ')
+      }) )
+    }
 
   }
 }
@@ -816,6 +1648,51 @@ if ($OutCsv) {
     Write-Verbose "Wrote CSV to $OutCsv"
   } catch {
     Write-Warning "Failed writing CSV: $($_.Exception.Message)"
+  }
+}
+
+if ($OutHtml) {
+  Write-Host "Generating HTML report..." -ForegroundColor Yellow
+  Write-Verbose "Total findings to include: $($results.Count)"
+  Write-Verbose "Output path: $OutHtml"
+  
+  try {
+    # Ensure the output directory exists
+    $outputDir = Split-Path -Parent $OutHtml -ErrorAction SilentlyContinue
+    if ($outputDir -and -not (Test-Path -LiteralPath $outputDir)) {
+      Write-Verbose "Creating output directory: $outputDir"
+      New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+    }
+    
+    $sortedResults = $results | Sort-Object { $severityOrder[$_.Severity] },Collection
+    Write-Verbose "Calling New-HtmlReport function..."
+    $success = New-HtmlReport -Results $sortedResults -OutputPath $OutHtml
+    
+    if ($success) {
+      Write-Host "HTML report generated successfully: $OutHtml" -ForegroundColor Green
+      
+      # Verify the file was actually created
+      if (Test-Path -LiteralPath $OutHtml) {
+        $fileSize = (Get-Item -LiteralPath $OutHtml).Length
+        Write-Host "File size: $fileSize bytes" -ForegroundColor Cyan
+        
+        # Optionally open the HTML file
+        if ($PSVersionTable.Platform -ne 'Unix') {
+          try {
+            Start-Process $OutHtml
+          } catch {
+            Write-Verbose "Could not auto-open HTML file: $($_.Exception.Message)"
+          }
+        }
+      } else {
+        Write-Warning "HTML file was not created at expected location: $OutHtml"
+      }
+    } else {
+      Write-Warning "HTML report generation failed (function returned false)"
+    }
+  } catch {
+    Write-Warning "Failed generating HTML report: $($_.Exception.Message)"
+    Write-Warning "Full error: $($_.Exception.ToString())"
   }
 }
 
