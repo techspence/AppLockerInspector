@@ -156,7 +156,7 @@ function Test-UserWritableOrBroadPath {
       }
   )
   foreach ($c in $checks) { 
-    if ($PathText -match $c.Re) { 
+    if ($PathText -match $c.Regex) { 
       return @{ Match=$true; Reason=$c.Reason; Severity=$c.Severity } 
     } 
   }
@@ -225,63 +225,6 @@ function Expand-PathMacros {
   # Normalize double backslashes in middle (not leading for UNC)
   $expanded = $expanded -replace '(?<!^|\\)\\{2,}','\'
   return $expanded
-}
-
-# ----- Local NTFS rights -----
-
-function Get-LocalNtfsRightsForPrincipal {
-  <# Returns: 'None','Read','Write','Modify','Full' #>
-  param(
-    [string]$Path,
-    
-    [string[]]$PrincipalNames
-  )
-  try { 
-    $acl = Get-Acl -Path $Path -ErrorAction Stop 
-  } catch { 
-    return 'None' 
-  }
-
-  $writeBits = [System.Security.AccessControl.FileSystemRights]::Write,
-               [System.Security.AccessControl.FileSystemRights]::Modify,
-               [System.Security.AccessControl.FileSystemRights]::FullControl,
-               [System.Security.AccessControl.FileSystemRights]::CreateFiles,
-               [System.Security.AccessControl.FileSystemRights]::AppendData,
-               [System.Security.AccessControl.FileSystemRights]::WriteData,
-               [System.Security.AccessControl.FileSystemRights]::Delete,
-               [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
-
-  $max = 'None'
-  foreach ($ace in $acl.Access) {
-    $aceId = $ace.IdentityReference.Value
-    if (-not ($PrincipalNames | Where-Object { $aceId -ieq $_ -or $aceId -match '(?i)\\Users$|^Everyone$|Authenticated Users' })) { 
-      continue 
-    }
-
-    if ($ace.AccessControlType -eq 'Deny') {
-      if ($writeBits | Where-Object { ($ace.FileSystemRights -band $_) -ne 0 }) { 
-        return 'None' 
-      }
-      continue
-    }
-
-    $r = $ace.FileSystemRights
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne 0) { 
-      return 'Full' 
-    }
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::Modify) -ne 0) { 
-      return 'Modify' 
-    }
-    if ($writeBits | Where-Object { ($r -band $_) -ne 0 }) { 
-      if ($max -in @('None','Read')) { 
-        $max = 'Write' 
-      } 
-    }
-    if ($max -eq 'None') { 
-      $max = 'Read' 
-    }
-  }
-  return $max
 }
 
 # ----- UNC share helpers -----
@@ -424,58 +367,41 @@ function Test-ShareWritableForPrincipal {
   return $false
 }
 
-function Get-EffectiveNtfsRightsForPrincipal {
-  param(
-    [string]$Path, 
-    
-    [string[]]$PrincipalNames
-  )
-  try { 
-    $acl = Get-Acl -Path $Path -ErrorAction Stop 
-  } catch { 
-    return 'None' 
-  }
 
-  $writeBits = [System.Security.AccessControl.FileSystemRights]::Write,
-               [System.Security.AccessControl.FileSystemRights]::Modify,
-               [System.Security.AccessControl.FileSystemRights]::FullControl,
-               [System.Security.AccessControl.FileSystemRights]::CreateFiles,
-               [System.Security.AccessControl.FileSystemRights]::AppendData,
-               [System.Security.AccessControl.FileSystemRights]::WriteData,
-               [System.Security.AccessControl.FileSystemRights]::Delete,
-               [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
+function Test-EffectiveNtfsRights {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string[]]$Principal
+    )
 
-  $max = 'None'
-  foreach ($ace in $acl.Access) {
-    $aceId = $ace.IdentityReference.Value
-    if (-not ($PrincipalNames | Where-Object { $aceId -ieq $_ -or $aceId -match '(?i)\\Users$|^Everyone$|Authenticated Users' })) { 
-      continue 
-    }
+    try {
+        $acl = Get-Acl -Path $Path -ErrorAction Stop
+        foreach ($p in $Principal) {
+            $resolvedPrincipal = $p
+            if ($resolvedPrincipal -match '^S-\d-\d+(-\d+)+$') {
+                try {
+                    $sid = New-Object System.Security.Principal.SecurityIdentifier($resolvedPrincipal)
+                    $resolvedPrincipal = $sid.Translate([System.Security.Principal.NTAccount]).Value
+                } catch {
+                    continue
+                }
+            }
 
-    if ($ace.AccessControlType -eq 'Deny') {
-      if ($writeBits | Where-Object { ($ace.FileSystemRights -band $_) -ne 0 }) { 
-        return 'None' 
-      }
-      continue
+            foreach ($ace in $acl.Access) {
+                if ($ace.IdentityReference -like "*$resolvedPrincipal") {
+                    if ($ace.AccessControlType -eq 'Allow' -and
+                        $ace.FileSystemRights -match 'Write|Modify|FullControl') {
+                        return $true
+                    }
+                }
+            }
+        }
+    } catch {
+        Write-Verbose "Failed to check rights on $Path for $Principal`: $_"
     }
-    $r = $ace.FileSystemRights
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne 0) { 
-      return 'Full' 
-    }
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::Modify) -ne 0) { 
-      return 'Modify' 
-    }
-    if ($writeBits | Where-Object { ($r -band $_) -ne 0 }) { 
-      if ($max -in @('None','Read')) { 
-        $max = 'Write' 
-      } 
-    }
-    if ($max -eq 'None') { 
-      $max = 'Read' 
-    }
-  }
-  return $max
+    return $false
 }
+
 
 function Resolve-BroadPrincipalNames {
   param([string[]]$UserOrGroupSid)
@@ -645,7 +571,7 @@ foreach ($col in $collections) {
       if ($isLocalPath -and -not $hasWildcard) {
         $broadNames = Resolve-BroadPrincipalNames @($principal)
         if (Test-Path -LiteralPath $expanded) {
-          $localNtfsRight = Get-LocalNtfsRightsForPrincipal -Path $expanded -PrincipalNames $broadNames
+          $localNtfsRight = Test-EffectiveNtfsRights -Path $expanded -Principal $broadNames
           if ($localNtfsRight -in @('Write','Modify','Full')) {
             $results.Add( (New-Finding -Severity 'High' -Props @{
               Collection=$colType
@@ -677,7 +603,7 @@ foreach ($col in $collections) {
         $parent = Split-Path -Path $expanded -Parent -ErrorAction SilentlyContinue
         if ($parent -and (Test-Path -LiteralPath $parent)) {
           $broadNames = Resolve-BroadPrincipalNames @($principal)
-          $ntfsParent = Get-LocalNtfsRightsForPrincipal -Path $parent -PrincipalNames $broadNames
+          $ntfsParent = Test-EffectiveNtfsRights -Path $parent -Principal $broadNames
           if ($ntfsParent -in @('Write','Modify','Full')) {
             $results.Add( (New-Finding -Severity 'Medium' -Props @{
               Collection=$colType
@@ -735,7 +661,7 @@ foreach ($col in $collections) {
 
           # NTFS on the UNC path itself (skip wildcards)
           if ($condText -notmatch '[\*\?]') {
-            $ntfsRight = Get-EffectiveNtfsRightsForPrincipal -Path $condText -PrincipalNames $broadNames
+            $ntfsRight = Test-EffectiveNtfsRights -Path $condText -Principal $broadNames
             if ($ntfsRight -in @('Write','Modify','Full')) {
               $results.Add( (New-Finding -Severity 'High' -Props @{
                 Collection=$colType
@@ -872,14 +798,21 @@ foreach ($col in $collections) {
       }
     }
 
-  } # end foreach rule
-} # end foreach collection
+  }
+}
 
 # ----------------------------- Output -------------------------------------
 
+$severityOrder = @{
+    'High'   = 1
+    'Medium' = 2
+    'Low'    = 3
+    'Info'   = 4
+}
+
 if ($OutCsv) {
   try {
-    $results | Sort-Object Severity,Collection | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $OutCsv
+    $results | Sort-Object { $severityOrder[$_.Severity] },Collection | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $OutCsv
     Write-Verbose "Wrote CSV to $OutCsv"
   } catch {
     Write-Warning "Failed writing CSV: $($_.Exception.Message)"
@@ -889,7 +822,7 @@ if ($OutCsv) {
 if ($AsJson) {
   $results | ConvertTo-Json -Depth 6
 } else {
-  $results | Sort-Object @{Expression='Severity';Descending=$true}, Collection, RuleType, RuleName
+  $results | Sort-Object { $severityOrder[$_.Severity] }, Collection, RuleType, RuleName
 }
 
 }
