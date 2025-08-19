@@ -13,9 +13,7 @@
 
 AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigured/risky settings, including actual ACL checks. If you don’t provide a policy file, the tool will **export the local effective AppLocker policy** and analyze that automatically.
 
-_Disclaimer_: ChatGPT, my coding partner in "crime", wrote most of this. It's been heavily edited by me to remove as much sillyness as I could find and to make it more readable. However, if anyone finds anything wacky, please let me know so I can fix it!
-
-Hope it's useful to some people! 🙌
+_Disclaimer: ChatGPT, my coding partner in "crime", wrote most of this. It's been heavily edited by me to remove as much sillyness as I could find and to make it more readable. However, if anyone finds anything wacky, please let me know so I can fix it! Hope it's useful to some people! 🙌_
 
 ----
 
