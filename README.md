@@ -15,13 +15,13 @@ AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigure
 
 ----
 
-## Get even MORE detail from (MagicSword)[https://go.spenceralessi.com/magicsword]
+## Get even MORE detail from [MagicSword](https://go.spenceralessi.com/magicsword)
 
 Want to convert AppLocker policies to WDAC compatible policies AND get a report of all the dangerous misconfigs in your policy?
 
-👉 Check out (MagicSword)[https://go.spenceralessi.com/magicsword]
+👉 Check out [MagicSword](https://go.spenceralessi.com/magicsword)
 
-Here's 4 neat things to know about (MagicSword)[https://go.spenceralessi.com/magicsword]:
+Here's 4 neat things to know about [MagicSword](https://go.spenceralessi.com/magicsword):
 
 - It's designed around threat-intel & security research (not just deny all)
 - It's optimized onboarding gets you up and running quickly
@@ -29,6 +29,8 @@ Here's 4 neat things to know about (MagicSword)[https://go.spenceralessi.com/mag
 - Agentless
 
 _Disclaimer: The folks at MagicSword are friends. I am not paid for this shoutout. They just have a super cool project and I want to help them get the word out!!_
+
+_p.s.: If you want to try it out, DM me for a discount code_
 ----
 
 ## Features
