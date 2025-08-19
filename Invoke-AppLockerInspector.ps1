@@ -49,6 +49,7 @@ param(
   [System.Management.Automation.PSCredential]$Credential,
 
   [switch]$AsJson,
+
   [string]$OutCsv
 )
 
@@ -67,8 +68,12 @@ function Get-Art($Version) {
 }
 
 function Resolve-SidOrName {
-  param([string]$SidOrName)
-  if (-not $SidOrName) { return $SidOrName }
+  param(
+    [string]$SidOrName
+  )
+  if (-not $SidOrName) { 
+    return $SidOrName 
+  }
   if ($SidOrName -match '^S-\d-\d+-.+') {
     try {
       return ([System.Security.Principal.SecurityIdentifier]$SidOrName).
@@ -78,56 +83,110 @@ function Resolve-SidOrName {
   return $SidOrName
 }
 
-function Is-BroadPrincipal {
-  param([string]$SidOrName)
+function Test-BroadPrincipal {
+  param(
+    [string]$SidOrName
+  )
   $sid = $SidOrName
   $name = Resolve-SidOrName $SidOrName
-  $broadSids = @('S-1-1-0','S-1-5-11','S-1-5-32-545') # Everyone, Auth Users, Users
-  if ($sid -and $broadSids -contains $sid) { return $true }
-  if ($name -match '(?i)^(Everyone|Authenticated Users|BUILTIN\\Users|Domain Users|Interactive)$') { return $true }
+  
+  # Everyone, Auth Users, Users
+  $broadSids = @('S-1-1-0','S-1-5-11','S-1-5-32-545')
+  if ($sid -and $broadSids -contains $sid) { 
+      return $true 
+  }
+  if ($name -match '(?i)^(Everyone|Authenticated Users|BUILTIN\\Users|Domain Users|Interactive)$') { 
+    return $true 
+  }
   return $false
 }
 
-function Is-AdminPrincipal {
-  param([string]$SidOrName)
+function Test-AdminPrincipal {
+  param(
+    [string]$SidOrName
+  )
   $sid = $SidOrName
   $name = Resolve-SidOrName $SidOrName
-  if ($sid -eq 'S-1-5-32-544') { return $true } # BUILTIN\Administrators
-  if ($name -match '(?i)^BUILTIN\\Administrators$') { return $true }
+
+  # BUILTIN\Administrators
+  if ($sid -eq 'S-1-5-32-544') { 
+    return $true 
+  } 
+  if ($name -match '(?i)^BUILTIN\\Administrators$') { 
+    return $true 
+  }
   return $false
 }
 
 function Test-UserWritableOrBroadPath {
-  param([string]$PathText)
-  if (-not $PathText) { return $null }
-  $checks = @(
-    @{ Re='(?i)^\*$|^\*\\|^[A-Z]:\\\*$|^%OSDRIVE%\\\*';      Reason='Wildcard or drive root';              Severity='High'   },
-    @{ Re='(?i)^\\\\';                                      Reason='UNC/network path allowed';           Severity='High'   },
-    @{ Re='(?i)\\Windows\\Temp(\\|$)|(^|\\)Temp(\\|$)';     Reason='Temp folders are user-writable';     Severity='High'   },
-    @{ Re='(?i)\\Users(\\|$)|%USERPROFILE%|%LOCALAPPDATA%|%APPDATA%|%HOMEPATH%|%TMP%|%TEMP%';
-                                                           Reason='User profile/AppData is writable';    Severity='High'   },
-    @{ Re='(?i)\\(Downloads|Desktop|Documents)(\\|$)';      Reason='Common user-writable folders';       Severity='High'   },
-    @{ Re='(?i)\\Public(\\|$)';                             Reason='Public folders are shared/writable'; Severity='Medium' },
-    @{ Re='(?i)\\ProgramData(\\|$)';                        Reason='ProgramData often has writable subs';Severity='Medium' }
+  param(
+    [string]$PathText
   )
-  foreach ($c in $checks) { if ($PathText -match $c.Re) { return @{ Match=$true; Reason=$c.Reason; Severity=$c.Severity } } }
-  if ($PathText -match '(?i)\\Program Files( \(x86\))?(\\|$)' -or $PathText -match '(?i)\\Windows(\\|$)') { return $null }
+  if (-not $PathText) { 
+    return $null 
+  }
+  $checks = @(
+    @{ Regex='(?i)^\*$|^\*\\|^[A-Z]:\\\*$|^%OSDRIVE%\\\*';
+       Reason='Wildcard or drive root';              
+       Severity='High'   
+      },
+    @{ Regex='(?i)^\\\\';
+       Reason='UNC/network path allowed';           
+       Severity='High'   
+      },
+    @{ Regex='(?i)\\Windows\\Temp(\\|$)|(^|\\)Temp(\\|$)';     
+       Reason='Temp folders are user-writable';     
+       Severity='High'   
+      },
+    @{ Regex='(?i)\\Users(\\|$)|%USERPROFILE%|%LOCALAPPDATA%|%APPDATA%|%HOMEPATH%|%TMP%|%TEMP%';
+       Reason='User profile/AppData is writable';    
+       Severity='High'   
+      },
+    @{ Regex='(?i)\\(Downloads|Desktop|Documents)(\\|$)';      
+       Reason='Common user-writable folders';       
+       Severity='High'   
+      },
+    @{ Regex='(?i)\\Public(\\|$)';                             
+       Reason='Public folders are shared/writable'; 
+       Severity='Medium' 
+      },
+    @{ Regex='(?i)\\ProgramData(\\|$)';                        
+       Reason='ProgramData often has writable subs';
+       Severity='Medium' 
+      }
+  )
+  foreach ($c in $checks) { 
+    if ($PathText -match $c.Re) { 
+      return @{ Match=$true; Reason=$c.Reason; Severity=$c.Severity } 
+    } 
+  }
+  if ($PathText -match '(?i)\\Program Files( \(x86\))?(\\|$)' -or $PathText -match '(?i)\\Windows(\\|$)') { 
+    return $null 
+  }
   return $null
 }
 
 # Protected bases (except Windows\Temp)
-function Is-ProtectedPath {
-  param([string]$ExpandedLocalPath)
-  if (-not $ExpandedLocalPath) { return $false }
-  if ($ExpandedLocalPath -match '(?i)^[A-Z]:\\Windows\\Temp(\\|$)') { return $false }
+function Test-ProtectedPath {
+  param(
+    [string]$ExpandedLocalPath
+  )
+  if (-not $ExpandedLocalPath) { 
+    return $false 
+  }
+  if ($ExpandedLocalPath -match '(?i)^[A-Z]:\\Windows\\Temp(\\|$)') { 
+    return $false 
+  }
   return ($ExpandedLocalPath -match '(?i)^[A-Z]:\\Program Files( \(x86\))?\\') -or
          ($ExpandedLocalPath -match '(?i)^[A-Z]:\\Windows(\\|$|\\.+)')
 }
 
-$SeverityScore = @{ High=3; Medium=2; Low=1; Info=0 }
-
 function New-Finding {
-  param([string]$Severity,[hashtable]$Props)
+  param(
+    [string]$Severity,
+    
+    [hashtable]$Props)
+  
   [pscustomobject]@{
     Severity        = $Severity
     Collection      = $Props.Collection
@@ -145,15 +204,21 @@ function New-Finding {
 # ----- Env/macros expansion for local paths -----
 
 function Expand-PathMacros {
-  param([string]$PathText)
-  if (-not $PathText) { return $null }
+  param(
+    [string]$PathText
+  )
+  if (-not $PathText) { 
+    return $null 
+  }
   # Expand %ENV% tokens using .NET
   $expanded = [Environment]::ExpandEnvironmentVariables($PathText)
 
   # %OSDRIVE% common macro
   if ($expanded -match '(?i)%OSDRIVE%') {
     $sysDrive = (Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Root -match '^[A-Z]:\\$'} | Sort-Object Used -Descending | Select-Object -First 1).Root.TrimEnd('\')
-    if (-not $sysDrive) { $sysDrive = "$($env:SystemDrive)" }
+    if (-not $sysDrive) { 
+      $sysDrive = "$($env:SystemDrive)" 
+    }
     $expanded = $expanded -replace '(?i)%OSDRIVE%',$sysDrive
   }
 
@@ -166,8 +231,16 @@ function Expand-PathMacros {
 
 function Get-LocalNtfsRightsForPrincipal {
   <# Returns: 'None','Read','Write','Modify','Full' #>
-  param([string]$Path,[string[]]$PrincipalNames)
-  try { $acl = Get-Acl -Path $Path -ErrorAction Stop } catch { return 'None' }
+  param(
+    [string]$Path,
+    
+    [string[]]$PrincipalNames
+  )
+  try { 
+    $acl = Get-Acl -Path $Path -ErrorAction Stop 
+  } catch { 
+    return 'None' 
+  }
 
   $writeBits = [System.Security.AccessControl.FileSystemRights]::Write,
                [System.Security.AccessControl.FileSystemRights]::Modify,
@@ -181,47 +254,105 @@ function Get-LocalNtfsRightsForPrincipal {
   $max = 'None'
   foreach ($ace in $acl.Access) {
     $aceId = $ace.IdentityReference.Value
-    if (-not ($PrincipalNames | Where-Object { $aceId -ieq $_ -or $aceId -match '(?i)\\Users$|^Everyone$|Authenticated Users' })) { continue }
+    if (-not ($PrincipalNames | Where-Object { $aceId -ieq $_ -or $aceId -match '(?i)\\Users$|^Everyone$|Authenticated Users' })) { 
+      continue 
+    }
 
     if ($ace.AccessControlType -eq 'Deny') {
-      if ($writeBits | Where-Object { ($ace.FileSystemRights -band $_) -ne 0 }) { return 'None' }
+      if ($writeBits | Where-Object { ($ace.FileSystemRights -band $_) -ne 0 }) { 
+        return 'None' 
+      }
       continue
     }
 
     $r = $ace.FileSystemRights
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne 0) { return 'Full' }
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::Modify) -ne 0)     { return 'Modify' }
-    if ($writeBits | Where-Object { ($r -band $_) -ne 0 })                              { if ($max -in @('None','Read')) { $max = 'Write' } }
-    if ($max -eq 'None') { $max = 'Read' }
+    if (($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne 0) { 
+      return 'Full' 
+    }
+    if (($r -band [System.Security.AccessControl.FileSystemRights]::Modify) -ne 0) { 
+      return 'Modify' 
+    }
+    if ($writeBits | Where-Object { ($r -band $_) -ne 0 }) { 
+      if ($max -in @('None','Read')) { 
+        $max = 'Write' 
+      } 
+    }
+    if ($max -eq 'None') { 
+      $max = 'Read' 
+    }
   }
   return $max
 }
 
 # ----- UNC share helpers -----
 
-function Get-ShareRoot { param([string]$UncPath) if ($UncPath -notmatch '^(\\\\[^\\]+)\\([^\\]+)') { return $null } "$($Matches[1])\$($Matches[2])" }
-function Split-Share   { param([string]$UncPath) if ($UncPath -notmatch '^(\\\\[^\\]+)\\([^\\]+)') { return $null } [pscustomobject]@{ Server=$Matches[1].TrimStart('\'); Share=$Matches[2] } }
+function Get-ShareRoot { 
+  param(
+    [string]$UncPath
+  ) 
+  if ($UncPath -notmatch '^(\\\\[^\\]+)\\([^\\]+)') { 
+    return $null 
+  } 
+  
+  "$($Matches[1])\$($Matches[2])" 
+}
+function Split-Share   { 
+  param(
+    [string]$UncPath
+  ) 
+  if ($UncPath -notmatch '^(\\\\[^\\]+)\\([^\\]+)') {
+     return $null 
+  } 
+  
+  [pscustomobject]@{ 
+    Server=$Matches[1].TrimStart('\') 
+    Share=$Matches[2] 
+  } 
+}
 
 function New-CimOrWmi {
-  param([string]$ComputerName, [System.Management.Automation.PSCredential]$Credential)
+  param(
+    [string]$ComputerName, 
+    
+    [System.Management.Automation.PSCredential]$Credential
+  )
   try {
     $cim = New-CimSession -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop
-    return @{ Type='CIM'; Session=$cim }
+    return @{ 
+      Type='CIM'
+      Session=$cim 
+    }
   } catch {
     try {
       $opt = New-Object System.Management.ConnectionOptions
-      if ($Credential) { $opt.Username = $Credential.UserName; $opt.SecurePassword = $Credential.Password }
+      if ($Credential) { 
+        $opt.Username = $Credential.UserName
+        $opt.SecurePassword = $Credential.Password 
+      }
       $scope = New-Object System.Management.ManagementScope("\\$ComputerName\root\cimv2",$opt)
       $scope.Connect()
-      return @{ Type='WMI'; Scope=$scope }
-    } catch { return $null }
+      return @{ 
+        Type='WMI'
+        Scope=$scope 
+      }
+    } catch { 
+      return $null 
+    }
   }
 }
 
 function Get-ShareAclInfo {
-  param([string]$Server, [string]$Share, [System.Management.Automation.PSCredential]$Credential)
+  param(
+    [string]$Server, 
+    
+    [string]$Share, 
+    
+    [System.Management.Automation.PSCredential]$Credential
+  )
   $sess = New-CimOrWmi -ComputerName $Server -Credential $Credential
-  if (-not $sess) { return $null }
+  if (-not $sess) { 
+    return $null 
+  }
 
   if ($sess.Type -eq 'CIM') {
     try {
@@ -229,15 +360,23 @@ function Get-ShareAclInfo {
       return ($acc | Select-Object @{n='Account';e={$_.AccountName}},
                                @{n='AccessRight';e={$_.AccessRight}},
                                @{n='AccessControlType';e={$_.AccessControlType}})
-    } catch { return $null }
+    } catch { 
+      return $null 
+    }
   } else {
     try {
       $q = New-Object System.Management.ObjectQuery("SELECT * FROM Win32_LogicalShareSecuritySetting WHERE Name='$Share'")
       $searcher = New-Object System.Management.ManagementObjectSearcher($sess.Scope,$q)
       $obj = $searcher.Get() | Select-Object -First 1
-      if (-not $obj) { return $null }
+      if (-not $obj) { 
+        return $null 
+      }
       $sd = ([WMI]$obj.__PATH).GetSecurityDescriptor().Descriptor
-      $mapCtrl = @{ 2032127='Full'; 1245631='Change'; 1179817='Read' }
+      $mapCtrl = @{ 
+        2032127='Full'
+        1245631='Change'
+        1179817='Read' 
+      }
       $aces = @()
       foreach ($dacl in $sd.DACL) {
         $acct = try {
@@ -247,31 +386,55 @@ function Get-ShareAclInfo {
         $aces += [pscustomobject]@{
           Account           = $acct
           AccessRight       = $mapCtrl[[int]$dacl.AccessMask]
-          AccessControlType = (if ($dacl.AceType -eq 0) {'Allow'} else {'Deny'})
+          AccessControlType = (if ($dacl.AceType -eq 0) {
+            'Allow'
+          } else {
+            'Deny'
+          })
         }
       }
       return $aces
-    } catch { return $null }
+    } catch { 
+      return $null 
+    }
   }
 }
 
 function Test-ShareWritableForPrincipal {
-  param([array]$ShareAclRows, [string[]]$PrincipalNames)
-  if (-not $ShareAclRows) { return $false }
+  param(
+    [array]$ShareAclRows, 
+    
+    [string[]]$PrincipalNames
+  )
+  if (-not $ShareAclRows) { 
+    return $false 
+  }
   $writableTags = @('Change','Full','Modify','Write')
   foreach ($p in $PrincipalNames) {
     $hits = $ShareAclRows | Where-Object { $_.Account -ieq $p -or ($_.Account -match '(?i)\\Users$|^Everyone$|Authenticated Users') }
     if ($hits) {
-      if ($hits | Where-Object { $_.AccessControlType -eq 'Deny' -and ($writableTags -contains $_.AccessRight) }) { return $false }
-      if ($hits | Where-Object { $_.AccessControlType -eq 'Allow' -and ($writableTags -contains $_.AccessRight) }) { return $true }
+      if ($hits | Where-Object { $_.AccessControlType -eq 'Deny' -and ($writableTags -contains $_.AccessRight) }) { 
+        return $false 
+      }
+      if ($hits | Where-Object { $_.AccessControlType -eq 'Allow' -and ($writableTags -contains $_.AccessRight) }) { 
+        return $true 
+      }
     }
   }
   return $false
 }
 
 function Get-EffectiveNtfsRightsForPrincipal {
-  param([string]$Path, [string[]]$PrincipalNames)
-  try { $acl = Get-Acl -Path $Path -ErrorAction Stop } catch { return 'None' }
+  param(
+    [string]$Path, 
+    
+    [string[]]$PrincipalNames
+  )
+  try { 
+    $acl = Get-Acl -Path $Path -ErrorAction Stop 
+  } catch { 
+    return 'None' 
+  }
 
   $writeBits = [System.Security.AccessControl.FileSystemRights]::Write,
                [System.Security.AccessControl.FileSystemRights]::Modify,
@@ -285,17 +448,31 @@ function Get-EffectiveNtfsRightsForPrincipal {
   $max = 'None'
   foreach ($ace in $acl.Access) {
     $aceId = $ace.IdentityReference.Value
-    if (-not ($PrincipalNames | Where-Object { $aceId -ieq $_ -or $aceId -match '(?i)\\Users$|^Everyone$|Authenticated Users' })) { continue }
+    if (-not ($PrincipalNames | Where-Object { $aceId -ieq $_ -or $aceId -match '(?i)\\Users$|^Everyone$|Authenticated Users' })) { 
+      continue 
+    }
 
     if ($ace.AccessControlType -eq 'Deny') {
-      if ($writeBits | Where-Object { ($ace.FileSystemRights -band $_) -ne 0 }) { return 'None' }
+      if ($writeBits | Where-Object { ($ace.FileSystemRights -band $_) -ne 0 }) { 
+        return 'None' 
+      }
       continue
     }
     $r = $ace.FileSystemRights
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne 0) { return 'Full' }
-    if (($r -band [System.Security.AccessControl.FileSystemRights]::Modify) -ne 0)     { return 'Modify' }
-    if ($writeBits | Where-Object { ($r -band $_) -ne 0 })                              { if ($max -in @('None','Read')) { $max = 'Write' } }
-    if ($max -eq 'None') { $max = 'Read' }
+    if (($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne 0) { 
+      return 'Full' 
+    }
+    if (($r -band [System.Security.AccessControl.FileSystemRights]::Modify) -ne 0) { 
+      return 'Modify' 
+    }
+    if ($writeBits | Where-Object { ($r -band $_) -ne 0 }) { 
+      if ($max -in @('None','Read')) { 
+        $max = 'Write' 
+      } 
+    }
+    if ($max -eq 'None') { 
+      $max = 'Read' 
+    }
   }
   return $max
 }
@@ -305,7 +482,11 @@ function Resolve-BroadPrincipalNames {
   $names = @()
   foreach ($sid in $UserOrGroupSid) {
     $n = $sid
-    if ($sid -match '^S-\d-') { try { $n = ([System.Security.Principal.SecurityIdentifier]$sid).Translate([System.Security.Principal.NTAccount]).Value } catch {} }
+    if ($sid -match '^S-\d-') { 
+      try { 
+        $n = ([System.Security.Principal.SecurityIdentifier]$sid).Translate([System.Security.Principal.NTAccount]).Value 
+      } catch {} 
+    }
     $names += $n
   }
   $names += 'Everyone','Authenticated Users','BUILTIN\Users'
@@ -316,14 +497,17 @@ function Resolve-BroadPrincipalNames {
 
 Get-Art 0.1
 
-$policyFilePath = $null
 $xml = $null
+
+$SeverityScore = @{ High=3; Medium=2; Low=1; Info=0 }
 
 if ([string]::IsNullOrWhiteSpace($Path)) {
   try {
     Write-Verbose "No -Path supplied. Collecting effective AppLocker policy..."
     $xmlText = Get-AppLockerPolicy -Effective -Xml
-    if (-not $xmlText) { throw "Get-AppLockerPolicy returned no XML." }
+    if (-not $xmlText) { 
+      throw "Get-AppLockerPolicy returned no XML." 
+    }
 
     if (-not $OutPolicyXml -or [string]::IsNullOrWhiteSpace($OutPolicyXml)) {
       $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -331,14 +515,14 @@ if ([string]::IsNullOrWhiteSpace($Path)) {
     }
     # Ensure directory exists
     $dir = Split-Path -Parent $OutPolicyXml
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { 
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null 
+    }
 
     $xmlText | Out-File -LiteralPath $OutPolicyXml -Encoding UTF8
     Write-Verbose "Saved effective policy to '$OutPolicyXml'."
 
-    [xml]$xml = $xmlText
-    $policyFilePath = $OutPolicyXml
-  }
+    [xml]$xml = $xmlText  }
   catch {
     throw "Failed to retrieve effective AppLocker policy: $($_.Exception.Message)"
   }
@@ -348,12 +532,13 @@ else {
     throw "AppLocker policy file not found: $Path"
   }
   [xml]$xml = Get-Content -Raw -LiteralPath $Path
-  $policyFilePath = (Resolve-Path -LiteralPath $Path).Path
 }
 
-if (-not $xml.AppLockerPolicy) { throw "This does not look like an AppLocker policy XML." }
+if (-not $xml.AppLockerPolicy) { 
+  throw "This does not look like an AppLocker policy XML." 
+}
 
-$results     = New-Object System.Collections.Generic.List[object]
+$results = New-Object System.Collections.Generic.List[object]
 $collections = @($xml.AppLockerPolicy.RuleCollection)
 if (-not $collections -or $collections.Count -eq 0) { $collections = @($xml.SelectNodes('//RuleCollection')) }
 
@@ -361,36 +546,52 @@ if (-not $collections -or $collections.Count -eq 0) { $collections = @($xml.Sele
 
 foreach ($col in $collections) {
   $colType = $col.Type
-  if (-not $colType) { if ($col.FilePathRule -or $col.FilePublisherRule -or $col.FileHashRule) { $colType = '(Unknown)' } }
+  if (-not $colType) { 
+    if ($col.FilePathRule -or $col.FilePublisherRule -or $col.FileHashRule) { 
+      $colType = '(Unknown)' 
+    } 
+  }
 
-  $enf = $col.EnforcementMode; if (-not $enf) { $enf = 'NotConfigured' }
+  $enf = $col.EnforcementMode; if (-not $enf) { 
+    $enf = 'NotConfigured' 
+  }
   switch -Regex ($enf) {
     'NotConfigured' {
       $results.Add( (New-Finding -Severity 'High' -Props @{
-        Collection     = $colType; RuleType='(collection)'; Reason="Collection '$colType' is NotConfigured → default-allow for this type."
+        Collection = $colType
+        RuleType='(collection)'
+        Reason="Collection '$colType' is NotConfigured → default-allow for this type."
         Recommendation = "Set EnforcementMode='Enabled' for '$colType' (or 'AuditOnly' during pilot)."
       }) )
     }
     '^AuditOnly$' {
       $results.Add( (New-Finding -Severity 'High' -Props @{
-        Collection     = $colType; RuleType='(collection)'; Reason="Collection '$colType' is AuditOnly (no blocking)."
+        Collection = $colType
+        RuleType='(collection)'
+        Reason="Collection '$colType' is AuditOnly (no blocking)."
         Recommendation = "Switch '$colType' to 'Enabled'. Note: Script collection in AuditOnly will not enforce Constrained Language Mode."
       }) )
     }
   }
 
   $allRules = @()
-  if ($col.FilePathRule)      { $allRules += @($col.FilePathRule) }
-  if ($col.FilePublisherRule) { $allRules += @($col.FilePublisherRule) }
-  if ($col.FileHashRule)      { $allRules += @($col.FileHashRule) }
+  if ($col.FilePathRule) { 
+    $allRules += @($col.FilePathRule) 
+  }
+  if ($col.FilePublisherRule) { 
+    $allRules += @($col.FilePublisherRule)
+  }
+  if ($col.FileHashRule) { 
+    $allRules += @($col.FileHashRule) 
+  }
 
   foreach ($r in $allRules) {
-    $ruleType   = $r.NodeName
-    $action     = [string]$r.Action
-    $principal  = [string]$r.UserOrGroupSid
+    $ruleType = $r.NodeName
+    $action = [string]$r.Action
+    $principal = [string]$r.UserOrGroupSid
     $principalN = Resolve-SidOrName $principal
-    $isBroad    = Is-BroadPrincipal $principal
-    $isAdmin    = Is-AdminPrincipal $principal
+    $isBroad = Test-BroadPrincipal $principal
+    $isAdmin = Test-AdminPrincipal $principal
 
     $condType = ''; $condText = ''
     $reasons = @(); $rec = @(); $score = -1
@@ -447,16 +648,26 @@ foreach ($col in $collections) {
           $localNtfsRight = Get-LocalNtfsRightsForPrincipal -Path $expanded -PrincipalNames $broadNames
           if ($localNtfsRight -in @('Write','Modify','Full')) {
             $results.Add( (New-Finding -Severity 'High' -Props @{
-              Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-              ConditionType='Path'; Condition=$condText
+              Collection=$colType
+              RuleType=$ruleType
+              Action=$action
+              Principal=$principalN
+              RuleName=[string]$r.Name
+              ConditionType='Path'
+              Condition=$condText
               Reason="Local NTFS grants $localNtfsRight to broad principals on $expanded"
               Recommendation="Harden NTFS ACL; remove write/modify for broad groups and restrict to specific app/service groups."
             }) )
           }
         } else {
           $results.Add( (New-Finding -Severity 'Info' -Props @{
-            Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-            ConditionType='Path'; Condition=$condText
+            Collection=$colType
+            RuleType=$ruleType
+            Action=$action
+            Principal=$principalN
+            RuleName=[string]$r.Name
+            ConditionType='Path'
+            Condition=$condText
             Reason="Local path '$expanded' does not exist on this system (skipped NTFS check)"
             Recommendation="Validate on target systems where the path exists."
           }) )
@@ -469,8 +680,13 @@ foreach ($col in $collections) {
           $ntfsParent = Get-LocalNtfsRightsForPrincipal -Path $parent -PrincipalNames $broadNames
           if ($ntfsParent -in @('Write','Modify','Full')) {
             $results.Add( (New-Finding -Severity 'Medium' -Props @{
-              Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-              ConditionType='Path'; Condition=$condText
+              Collection=$colType
+              RuleType=$ruleType
+              Action=$action
+              Principal=$principalN
+              RuleName=[string]$r.Name
+              ConditionType='Path'
+              Condition=$condText
               Reason="Wildcard path; parent '$parent' NTFS grants $ntfsParent to broad principals"
               Recommendation="Review NTFS ACL on parent and avoid wildcard allows on user-writable trees."
             }) )
@@ -482,17 +698,22 @@ foreach ($col in $collections) {
       if ($TestSharePermissions -and $condText -match '^(\\\\)') {
         $split = Split-Share -UncPath $condText
         if ($split) {
-          $serverName  = $split.Server
-          $shareName   = $split.Share
-          $broadNames  = Resolve-BroadPrincipalNames @($principal)
-          $shareAcl    = Get-ShareAclInfo -Server $serverName -Share $shareName -Credential $Credential
+          $serverName = $split.Server
+          $shareName = $split.Share
+          $broadNames = Resolve-BroadPrincipalNames @($principal)
+          $shareAcl = Get-ShareAclInfo -Server $serverName -Share $shareName -Credential $Credential
           $shareWritable = $false
           if ($shareAcl) {
             $shareWritable = Test-ShareWritableForPrincipal -ShareAclRows $shareAcl -PrincipalNames $broadNames
           } else {
             $results.Add( (New-Finding -Severity 'Info' -Props @{
-              Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-              ConditionType='Path'; Condition=$condText
+              Collection=$colType
+              RuleType=$ruleType
+              Action=$action
+              Principal=$principalN
+              RuleName=[string]$r.Name
+              ConditionType='Path'
+              Condition=$condText
               Reason="Could not read share ACL on \\$serverName\$shareName (insufficient rights or remote management disabled)"
               Recommendation="Run with credentials that can query share permissions or audit directly on the file server."
             }) )
@@ -500,8 +721,13 @@ foreach ($col in $collections) {
 
           if ($shareWritable) {
             $results.Add( (New-Finding -Severity 'High' -Props @{
-              Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-              ConditionType='Path'; Condition=$condText
+              Collection=$colType
+              RuleType=$ruleType
+              Action=$action
+              Principal=$principalN
+              RuleName=[string]$r.Name
+              ConditionType='Path'
+              Condition=$condText
               Reason="Share ACL on \\$serverName\$shareName grants Change/Full to broad principals"
               Recommendation="Tighten SMB share permissions: remove Change/Full for Everyone/Auth Users/Users."
             }) )
@@ -512,8 +738,13 @@ foreach ($col in $collections) {
             $ntfsRight = Get-EffectiveNtfsRightsForPrincipal -Path $condText -PrincipalNames $broadNames
             if ($ntfsRight -in @('Write','Modify','Full')) {
               $results.Add( (New-Finding -Severity 'High' -Props @{
-                Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-                ConditionType='Path'; Condition=$condText
+                Collection=$colType
+                RuleType=$ruleType
+                Action=$action
+                Principal=$principalN
+                RuleName=[string]$r.Name
+                ConditionType='Path'
+                Condition=$condText
                 Reason="NTFS grants $ntfsRight to broad principals at UNC path"
                 Recommendation="Harden NTFS ACL; remove write for broad groups and restrict to least-privilege groups."
               }) )
@@ -526,12 +757,12 @@ foreach ($col in $collections) {
       $condType = 'Publisher'
       $c = $r.Conditions.FilePublisherCondition
       $publisher = [string]$c.PublisherName
-      $product   = [string]$c.ProductName
-      $binary    = [string]$c.BinaryName
-      $range     = $c.BinaryVersionRange
-      $low       = if ($range) { $range.LowSection; if (-not $low) { $low = $range.Low } }
-      $high      = if ($range) { $range.HighSection; if (-not $high){ $high= $range.High } }
-      $condText  = "Publisher='$publisher'; Product='$product'; Binary='$binary'; VersionRange=[$low,$high]"
+      $product = [string]$c.ProductName
+      $binary = [string]$c.BinaryName
+      $range = $c.BinaryVersionRange
+      $low = if ($range) { $range.LowSection; if (-not $low) { $low = $range.Low } }
+      $high = if ($range) { $range.HighSection; if (-not $high){ $high= $range.High } }
+      $condText = "Publisher='$publisher'; Product='$product'; Binary='$binary'; VersionRange=[$low,$high]"
 
       if ($action -match 'Allow') {
         if (-not $publisher -or $publisher -eq '*') {
@@ -549,20 +780,29 @@ foreach ($col in $collections) {
           $rec     += "Specify an upper version bound or update allow rules as versions are vetted."
           $score = [Math]::Max($score, $SeverityScore['Medium'])
         }
-        if (Is-BroadPrincipal $principal -and -not (Is-AdminPrincipal $principal)) {
+        if (Test-BroadPrincipal $principal -and -not (Test-AdminPrincipal $principal)) {
           $reasons += "Principal is broad (Everyone/Authenticated Users/Users)"
           $rec     += "Restrict the principal to a minimal, purpose-built group."
           $score = [Math]::Max($score, $SeverityScore['Medium'])
         }
-        if ($exceptionCount -gt 0 -and $score -gt 0) { $score -= 1 }
+        if ($exceptionCount -gt 0 -and $score -gt 0) { 
+          $score -= 1 
+        }
       }
 
       if ($score -ge 0 -and $reasons.Count -gt 0) {
         $sev = ($SeverityScore.GetEnumerator() | Sort-Object Value -Descending | Where-Object { $_.Value -le $score } | Select-Object -First 1).Key
-        if (-not $sev) { $sev = 'Info' }
+        if (-not $sev) { 
+          $sev = 'Info' 
+        }
         $results.Add( (New-Finding -Severity $sev -Props @{
-          Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-          ConditionType=$condType; Condition=$condText
+          Collection=$colType
+          RuleType=$ruleType
+          Action=$action
+          Principal=$principalN
+          RuleName=[string]$r.Name
+          ConditionType=$condType
+          Condition=$condText
           Reason=($reasons -join '; ')
           Recommendation= (($rec | Select-Object -Unique) -join ' ')
         }) )
@@ -573,10 +813,15 @@ foreach ($col in $collections) {
       $hashObjs = @($r.Conditions.FileHashCondition.FileHash)
       $hashList = if ($hashObjs) { ($hashObjs | ForEach-Object { $_.InputFileName }) -join '; ' } else { '<no-hash-names>' }
       $condText = "Hashes: $hashList"
-      if ($action -match 'Allow' -and (Is-BroadPrincipal $principal) -and -not (Is-AdminPrincipal $principal)) {
+      if ($action -match 'Allow' -and (Test-BroadPrincipal $principal) -and -not (Test-AdminPrincipal $principal)) {
         $results.Add( (New-Finding -Severity 'Low' -Props @{
-          Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-          ConditionType=$condType; Condition=$condText
+          Collection=$colType
+          RuleType=$ruleType
+          Action=$action
+          Principal=$principalN
+          RuleName=[string]$r.Name
+          ConditionType=$condType
+          Condition=$condText
           Reason="Allow-by-hash is tight, but principal is overly broad"
           Recommendation="Assign allow-by-hash to a narrower group where feasible."
         }) )
@@ -589,14 +834,19 @@ foreach ($col in $collections) {
       if ($action -match 'Allow' -and $isBroad -and -not $isAdmin -and
           $isLocalPath -and -not $hasWildcard -and $expanded -and
           ($localNtfsRight -in @($null,'None','Read')) -and
-          (Is-ProtectedPath -ExpandedLocalPath $expanded)) {
+          (Test-ProtectedPath -ExpandedLocalPath $expanded)) {
         $ntfsText = if ($null -eq $localNtfsRight) { 'Unknown' } else { $localNtfsRight }
         $reasons = @("Broad principal allowed, but target is in a protected location and not writable by broad principals (NTFS: $ntfsText)")
         $rec = @("No change needed if the file remains locked down; consider Publisher/Hash rules if you want defense-in-depth.")
         $sev = 'Info'
         $results.Add( (New-Finding -Severity $sev -Props @{
-          Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-          ConditionType=$condType; Condition=$condText
+          Collection=$colType
+          RuleType=$ruleType
+          Action=$action
+          Principal=$principalN
+          RuleName=[string]$r.Name
+          ConditionType=$condType
+          Condition=$condText
           Reason=($reasons -join '; ')
           Recommendation=(($rec | Select-Object -Unique) -join ' ')
         }) )
@@ -605,10 +855,17 @@ foreach ($col in $collections) {
 
       if (-not $downgraded) {
         $sev = ($SeverityScore.GetEnumerator() | Sort-Object Value -Descending | Where-Object { $_.Value -le $score } | Select-Object -First 1).Key
-        if (-not $sev) { $sev = 'Info' }
+        if (-not $sev) { 
+          $sev = 'Info' 
+        }
         $results.Add( (New-Finding -Severity $sev -Props @{
-          Collection=$colType; RuleType=$ruleType; Action=$action; Principal=$principalN; RuleName=[string]$r.Name
-          ConditionType=$condType; Condition=$condText
+          Collection=$colType
+          RuleType=$ruleType
+          Action=$action
+          Principal=$principalN
+          RuleName=[string]$r.Name
+          ConditionType=$condType
+          Condition=$condText
           Reason=($reasons -join '; ')
           Recommendation=(($rec | Select-Object -Unique) -join ' ')
         }) )
