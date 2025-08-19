@@ -15,7 +15,7 @@ AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigure
 
 ----
 
-## Get even MORE detail from [MagicSword](https://go.spenceralessi.com/magicsword)
+### Get even MORE detail from [MagicSword](https://go.spenceralessi.com/magicsword)
 
 Want to convert AppLocker policies to WDAC compatible policies AND get a report of all the dangerous misconfigs in your policy?
 
