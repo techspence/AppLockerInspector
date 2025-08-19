@@ -13,7 +13,23 @@
 
 AppLocker Inspector audits an AppLocker policy XML and reports weak/misconfigured/risky settings, including actual ACL checks. If you don’t provide a policy file, the tool will **export the local effective AppLocker policy** and analyze that automatically.
 
+----
 
+## Get even MORE detail from (MagicSword)[https://go.spenceralessi.com/magicsword]
+
+Want to convert AppLocker policies to WDAC compatible policies AND get a report of all the dangerous misconfigs in your policy?
+
+👉 Check out (MagicSword)[https://go.spenceralessi.com/magicsword]
+
+Here's 4 neat things to know about (MagicSword)[https://go.spenceralessi.com/magicsword]:
+
+- It's designed around threat-intel & security research (not just deny all)
+- It's optimized onboarding gets you up and running quickly
+- No SOC required
+- Agentless
+
+_Disclaimer: The folks at MagicSword are friends. I am not paid for this shoutout. They just have a super cool project and I want to help them get the word out!!_
+----
 
 ## Features
 
