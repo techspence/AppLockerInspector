@@ -31,6 +31,7 @@ Here's 4 neat things to know about [MagicSword](https://go.spenceralessi.com/mag
 _Disclaimer: The folks at MagicSword are friends. I am not paid for this shoutout. They just have a super cool project and I want to help them get the word out!!_
 
 _p.s.: If you want to try it out, DM me for a discount code_
+
 ----
 
 ## Features
