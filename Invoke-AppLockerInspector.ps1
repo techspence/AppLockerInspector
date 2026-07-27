@@ -186,6 +186,243 @@ function Test-ProtectedPath {
          ($ExpandedLocalPath -match '(?i)^[A-Z]:\\Windows(\\|$|\\.+)')
 }
 
+function Test-SimpleDirectoryWildcardPath {
+  param(
+    [string]$PathText
+  )
+  if (-not $PathText) {
+    return $false
+  }
+
+  $trimmed = $PathText.Trim()
+  if ($trimmed -notmatch '\\\*$' -or $trimmed -match '\?') {
+    return $false
+  }
+  if ($trimmed -match '(?i)^\*$|^\*\\|^[A-Z]:\\\*$|^%OSDRIVE%\\\*$') {
+    return $false
+  }
+
+  $prefix = $trimmed.Substring(0, $trimmed.Length - 2)
+    return ($prefix -match '^[A-Za-z]:\\.+$') -or
+      ($prefix -match '^%[^%]+%(?:\\.+)?$') -or
+         ($prefix -match '^\\\\[^\\]+\\[^\\]+(?:\\.+)?$')
+}
+
+function Get-PathWildcardAssessment {
+  param(
+    [string]$PathText
+  )
+  if (-not $PathText -or $PathText -notmatch '[\*\?]') {
+    return $null
+  }
+  if (Test-SimpleDirectoryWildcardPath -PathText $PathText) {
+    return $null
+  }
+  if ($PathText -match '(?i)\*\.[a-z0-9]{2,4}|\*\.\*') {
+    return @{ Reason = "Wildcard extension pattern ($($Matches[0]))"; Severity = 'Medium' }
+  }
+  if ($PathText -match '\?') {
+    return @{ Reason = 'Single-character wildcard in path'; Severity = 'Medium' }
+  }
+  if ($PathText -match '(?i)(^|\\)[^\\]*\*[^\\]*($|\\)') {
+    return @{ Reason = 'Wildcard embedded inside a path component'; Severity = 'Medium' }
+  }
+  return $null
+}
+
+function Get-PathAclCheckTarget {
+  param(
+    [string]$ExpandedPath
+  )
+  if (-not $ExpandedPath) {
+    return $null
+  }
+
+  $candidate = $ExpandedPath.TrimEnd('\')
+  if (-not $candidate) {
+    return $null
+  }
+  if ($candidate -notmatch '[\*\?]') {
+    return $candidate
+  }
+
+  while ($candidate -and $candidate -match '[\*\?]') {
+    $parent = Split-Path -Path $candidate -Parent -ErrorAction SilentlyContinue
+    if (-not $parent -or $parent -eq $candidate) {
+      return $null
+    }
+    $candidate = $parent.TrimEnd('\')
+  }
+
+  return $candidate
+}
+
+function Test-PrincipalScopeCovers {
+  param(
+    [string]$ShadowSidOrName,
+    [string]$TargetSidOrName
+  )
+  if (-not $ShadowSidOrName -or -not $TargetSidOrName) {
+    return $false
+  }
+
+  $shadowName = Resolve-SidOrName $ShadowSidOrName
+  $targetName = Resolve-SidOrName $TargetSidOrName
+  if ($ShadowSidOrName -ieq $TargetSidOrName -or $shadowName -ieq $targetName) {
+    return $true
+  }
+
+  return $ShadowSidOrName -eq 'S-1-1-0' -or $shadowName -match '(?i)^Everyone$'
+}
+
+function Get-NormalizedPathForComparison {
+  param(
+    [string]$PathText
+  )
+  $expanded = Expand-PathMacros $PathText
+  if (-not $expanded) {
+    return $null
+  }
+
+  return ($expanded.Trim().TrimEnd('\')).ToLowerInvariant()
+}
+
+function Get-DirectoryWildcardBase {
+  param(
+    [string]$PathText
+  )
+  if (-not (Test-SimpleDirectoryWildcardPath -PathText $PathText)) {
+    return $null
+  }
+
+  $normalized = Get-NormalizedPathForComparison -PathText $PathText
+  if (-not $normalized -or $normalized.Length -lt 2) {
+    return $null
+  }
+
+  return $normalized.Substring(0, $normalized.Length - 2).TrimEnd('\')
+}
+
+function Test-PathConditionCovers {
+  param(
+    [string]$ShadowPath,
+    [string]$TargetPath
+  )
+  $shadowNorm = Get-NormalizedPathForComparison -PathText $ShadowPath
+  $targetNorm = Get-NormalizedPathForComparison -PathText $TargetPath
+  if (-not $shadowNorm -or -not $targetNorm) {
+    return $false
+  }
+  if ($shadowNorm -eq $targetNorm) {
+    return $true
+  }
+
+  $shadowBase = Get-DirectoryWildcardBase -PathText $ShadowPath
+  if ($shadowBase) {
+    return $targetNorm -eq $shadowBase -or $targetNorm.StartsWith("$shadowBase\\")
+  }
+
+  if ($shadowNorm -eq '*') {
+    return $true
+  }
+
+  return $false
+}
+
+function Test-PublisherConditionCovers {
+  param(
+    $ShadowCondition,
+    $TargetCondition
+  )
+  if (-not $ShadowCondition -or -not $TargetCondition) {
+    return $false
+  }
+
+  $shadowPublisher = [string]$ShadowCondition.PublisherName
+  $targetPublisher = [string]$TargetCondition.PublisherName
+  $shadowProduct = [string]$ShadowCondition.ProductName
+  $targetProduct = [string]$TargetCondition.ProductName
+  $shadowBinary = [string]$ShadowCondition.BinaryName
+  $targetBinary = [string]$TargetCondition.BinaryName
+
+  if ($shadowPublisher -ne '*' -and $shadowPublisher -ne $targetPublisher) {
+    return $false
+  }
+  if ($shadowProduct -ne '*' -and $shadowProduct -ne $targetProduct) {
+    return $false
+  }
+  if ($shadowBinary -ne '*' -and $shadowBinary -ne $targetBinary) {
+    return $false
+  }
+
+  $shadowRange = $ShadowCondition.BinaryVersionRange
+  $targetRange = $TargetCondition.BinaryVersionRange
+  if (-not $shadowRange) {
+    return $true
+  }
+  if (-not $targetRange) {
+    return $false
+  }
+
+  $shadowLow = if ($shadowRange) { if ($shadowRange.LowSection) { [string]$shadowRange.LowSection } else { [string]$shadowRange.Low } }
+  $shadowHigh = if ($shadowRange) { if ($shadowRange.HighSection) { [string]$shadowRange.HighSection } else { [string]$shadowRange.High } }
+  $targetLow = if ($targetRange) { if ($targetRange.LowSection) { [string]$targetRange.LowSection } else { [string]$targetRange.Low } }
+  $targetHigh = if ($targetRange) { if ($targetRange.HighSection) { [string]$targetRange.HighSection } else { [string]$targetRange.High } }
+
+  return (($shadowLow -eq $targetLow) -or [string]::IsNullOrWhiteSpace($shadowLow) -or $shadowLow -eq '*') -and
+         (($shadowHigh -eq $targetHigh) -or [string]::IsNullOrWhiteSpace($shadowHigh) -or $shadowHigh -eq '*')
+}
+
+function Test-HashConditionCovers {
+  param(
+    $ShadowCondition,
+    $TargetCondition
+  )
+  if (-not $ShadowCondition -or -not $TargetCondition) {
+    return $false
+  }
+
+  return [string]$ShadowCondition.OuterXml -eq [string]$TargetCondition.OuterXml
+}
+
+function Get-ShadowingRuleInfo {
+  param(
+    $Rule,
+    [array]$CollectionRules
+  )
+  if (-not $Rule -or -not $CollectionRules) {
+    return $null
+  }
+
+  foreach ($candidate in $CollectionRules) {
+    if ($candidate -eq $Rule -or [string]$candidate.Action -ne 'Deny') {
+      continue
+    }
+    if (-not (Test-PrincipalScopeCovers -ShadowSidOrName ([string]$candidate.UserOrGroupSid) -TargetSidOrName ([string]$Rule.UserOrGroupSid))) {
+      continue
+    }
+
+    $shadowsRule = $false
+    if ($Rule.Conditions.FilePathCondition -and $candidate.Conditions.FilePathCondition) {
+      $shadowsRule = Test-PathConditionCovers -ShadowPath ([string]$candidate.Conditions.FilePathCondition.Path) -TargetPath ([string]$Rule.Conditions.FilePathCondition.Path)
+    } elseif ($Rule.Conditions.FilePublisherCondition -and $candidate.Conditions.FilePublisherCondition) {
+      $shadowsRule = Test-PublisherConditionCovers -ShadowCondition $candidate.Conditions.FilePublisherCondition -TargetCondition $Rule.Conditions.FilePublisherCondition
+    } elseif ($Rule.Conditions.FileHashCondition -and $candidate.Conditions.FileHashCondition) {
+      $shadowsRule = Test-HashConditionCovers -ShadowCondition $candidate.Conditions.FileHashCondition -TargetCondition $Rule.Conditions.FileHashCondition
+    }
+
+    if ($shadowsRule) {
+      return [pscustomobject]@{
+        RuleName = [string]$candidate.Name
+        RuleType = $candidate.NodeName
+        Principal = Resolve-SidOrName ([string]$candidate.UserOrGroupSid)
+      }
+    }
+  }
+
+  return $null
+}
+
 function New-Finding {
   param(
     [string]$Severity,
@@ -380,6 +617,7 @@ function Test-EffectiveNtfsRights {
     )
 
     try {
+    $bestScore = 0
         $acl = Get-Acl -Path $Path -ErrorAction Stop
         foreach ($p in $Principal) {
             $resolvedPrincipal = $p
@@ -394,17 +632,41 @@ function Test-EffectiveNtfsRights {
 
             foreach ($ace in $acl.Access) {
                 if ($ace.IdentityReference -like "*$resolvedPrincipal") {
-                    if ($ace.AccessControlType -eq 'Allow' -and
-                        $ace.FileSystemRights -match 'Write|Modify|FullControl') {
-                        return $true
-                    }
+          if ($ace.AccessControlType -ne 'Allow') {
+            continue
+          }
+
+          $rights = [string]$ace.FileSystemRights
+          if ($rights -match 'FullControl') {
+            $bestScore = [Math]::Max($bestScore, 4)
+            continue
+          }
+          if ($rights -match 'Modify|DeleteSubdirectoriesAndFiles') {
+            $bestScore = [Math]::Max($bestScore, 3)
+            continue
+          }
+          if ($rights -match 'Write(?!Attributes)|CreateFiles|AppendData') {
+            $bestScore = [Math]::Max($bestScore, 2)
+            continue
+          }
+          if ($rights -match 'ReadAndExecute|Read|ExecuteFile|ListDirectory') {
+            $bestScore = [Math]::Max($bestScore, 1)
+          }
                 }
             }
         }
     } catch {
         Write-Verbose "Failed to check rights on $Path for $Principal`: $_"
+    return 'Unknown'
     }
-    return $false
+
+  switch ($bestScore) {
+    4 { return 'Full' }
+    3 { return 'Modify' }
+    2 { return 'Write' }
+    1 { return 'Read' }
+    default { return 'None' }
+  }
 }
 
 
@@ -1225,7 +1487,7 @@ function New-HtmlReport {
 
 # ----------------------------- Acquire / Parse XML ----------------------------------
 
-Get-Art 0.1
+Write-Host (Get-Art 0.1)
 
 $xml = $null
 
@@ -1335,41 +1597,44 @@ foreach ($col in $collections) {
     $expanded = $null
     $isLocalPath = $false
     $hasWildcard = $false
+    $pathLocationRisk = $null
+    $wildcardAssessment = $null
+    $aclCheckTarget = $null
+    $shareWritable = $false
+    $shadowingRule = $null
 
     if ($r.Conditions.FilePathCondition) {
       $condType = 'Path'
       $condText = [string]$r.Conditions.FilePathCondition.Path
 
       if ($action -match 'Allow') {
-        $hit = Test-UserWritableOrBroadPath $condText
-        if ($hit) {
-          $sev = $hit.Severity
+        $shadowingRule = Get-ShadowingRuleInfo -Rule $r -CollectionRules $allRules
+        if ($shadowingRule) {
+          Write-Verbose "Skipping findings for allow rule '$($r.Name)' because deny rule '$($shadowingRule.RuleName)' ($($shadowingRule.RuleType)) for '$($shadowingRule.Principal)' shadows it."
+          continue
+        }
+      }
+
+      if ($action -match 'Allow') {
+        $pathLocationRisk = Test-UserWritableOrBroadPath $condText
+        if ($pathLocationRisk) {
+          $sev = $pathLocationRisk.Severity
           if ($isBroad -and -not $isAdmin -and $sev -eq 'Medium') { $sev = 'High' }
-          $reasons += $hit.Reason
+          $reasons += $pathLocationRisk.Reason
           $rec += "Replace broad path Allow with Publisher or Hash rules limited to required binaries."
           $rec += "Avoid allowing user-writable paths for non-admin principals."
           $score = [Math]::Max($score, $SeverityScore[$sev])
-        }
-        if ($condText -match '(?i)\*\.[a-z0-9]{2,4}|\*\.\*') {
-          $reasons += "Wildcard extension pattern ($($Matches[0]))"
-          $rec     += "Constrain by exact file or trusted publisher; avoid wildcard extensions."
-          $score = [Math]::Max($score, $SeverityScore['Medium'])
         }
         if ($condText -match '(?i)^[A-Z]:\\$|^%OSDRIVE%\\\*$') {
           $reasons += "Root of OS drive allowed"
           $rec     += "Never allow entire drives; scope to trusted directories only."
           $score = [Math]::Max($score, $SeverityScore['High'])
         }
-        if ($isBroad -and -not $isAdmin) {
-          $reasons += "Principal is broad (Everyone/Authenticated Users/Users)"
-          $rec     += "Restrict the principal to a minimal, purpose-built group."
-          $score = [Math]::Max($score, $SeverityScore['Medium'])
-        }
-        # Check for any wildcard in path (covers *, ?, and other patterns)
-        if ($condText -match '[\*\?]' -and -not ($reasons | Where-Object { $_ -match 'Wildcard' })) {
-          $reasons += "Path contains wildcards allowing broader execution than intended"
-          $rec     += "Use specific file paths or Publisher rules instead of wildcards."
-          $score = [Math]::Max($score, $SeverityScore['Medium'])
+        $wildcardAssessment = Get-PathWildcardAssessment -PathText $condText
+        if ($wildcardAssessment) {
+          $reasons += $wildcardAssessment.Reason
+          $rec     += "Use specific file paths or Publisher rules instead of risky wildcard patterns."
+          $score = [Math]::Max($score, $SeverityScore[$wildcardAssessment.Severity])
         }
         if ($exceptionCount -gt 0 -and $score -gt 0) { $score -= 1 }
       }
@@ -1378,12 +1643,13 @@ foreach ($col in $collections) {
       $expanded   = Expand-PathMacros $condText
       $isLocalPath = $expanded -match '^[A-Za-z]:\\'
       $hasWildcard = $expanded -match '[\*\?]'
-      if ($isLocalPath -and -not $hasWildcard) {
+      $aclCheckTarget = if ($isLocalPath) { Get-PathAclCheckTarget -ExpandedPath $expanded } else { $null }
+      if ($isLocalPath -and $aclCheckTarget) {
         $broadNames = Resolve-BroadPrincipalNames @($principal)
-        if (Test-Path -LiteralPath $expanded) {
-          $localNtfsRight = Test-EffectiveNtfsRights -Path $expanded -Principal $broadNames
+        if (Test-Path -LiteralPath $aclCheckTarget) {
+          $localNtfsRight = Test-EffectiveNtfsRights -Path $aclCheckTarget -Principal $broadNames
           if ($localNtfsRight -in @('Write','Modify','Full')) {
-            $results.Add( (New-Finding -Severity 'High' -Props @{
+            $results.Add( (New-Finding -Severity $(if ($hasWildcard) { 'Medium' } else { 'High' }) -Props @{
               Collection=$colType
               RuleType=$ruleType
               Action=$action
@@ -1391,42 +1657,12 @@ foreach ($col in $collections) {
               RuleName=[string]$r.Name
               ConditionType='Path'
               Condition=$condText
-              Reason="Local NTFS grants $localNtfsRight to broad principals on $expanded"
-              Recommendation="Harden NTFS ACL; remove write/modify for broad groups and restrict to specific app/service groups."
+              Reason=$(if ($hasWildcard) { "Wildcard path; base path '$aclCheckTarget' grants $localNtfsRight to broad principals" } else { "Local NTFS grants $localNtfsRight to broad principals on $aclCheckTarget" })
+              Recommendation=$(if ($hasWildcard) { "Harden NTFS ACL on the base directory; avoid wildcard allows on writable trees." } else { "Harden NTFS ACL; remove write/modify for broad groups and restrict to specific app/service groups." })
             }) )
           }
         } else {
-          $results.Add( (New-Finding -Severity 'Info' -Props @{
-            Collection=$colType
-            RuleType=$ruleType
-            Action=$action
-            Principal=$principalN
-            RuleName=[string]$r.Name
-            ConditionType='Path'
-            Condition=$condText
-            Reason="Local path '$expanded' does not exist on this system (skipped NTFS check)"
-            Recommendation="Validate on target systems where the path exists."
-          }) )
-        }
-      } elseif ($isLocalPath -and $hasWildcard) {
-        # Try parent directory if obvious (heuristic)
-        $parent = Split-Path -Path $expanded -Parent -ErrorAction SilentlyContinue
-        if ($parent -and (Test-Path -LiteralPath $parent)) {
-          $broadNames = Resolve-BroadPrincipalNames @($principal)
-          $ntfsParent = Test-EffectiveNtfsRights -Path $parent -Principal $broadNames
-          if ($ntfsParent -in @('Write','Modify','Full')) {
-            $results.Add( (New-Finding -Severity 'Medium' -Props @{
-              Collection=$colType
-              RuleType=$ruleType
-              Action=$action
-              Principal=$principalN
-              RuleName=[string]$r.Name
-              ConditionType='Path'
-              Condition=$condText
-              Reason="Wildcard path; parent '$parent' NTFS grants $ntfsParent to broad principals"
-              Recommendation="Review NTFS ACL on parent and avoid wildcard allows on user-writable trees."
-            }) )
-          }
+          Write-Verbose "Skipping NTFS check for '$($r.Name)' because local path '$aclCheckTarget' does not exist on this system."
         }
       }
 
@@ -1438,7 +1674,6 @@ foreach ($col in $collections) {
           $shareName = $split.Share
           $broadNames = Resolve-BroadPrincipalNames @($principal)
           $shareAcl = Get-ShareAclInfo -Server $serverName -Share $shareName -Credential $Credential
-          $shareWritable = $false
           if ($shareAcl) {
             $shareWritable = Test-ShareWritableForPrincipal -ShareAclRows $shareAcl -PrincipalNames $broadNames
           } else {
@@ -1489,6 +1724,26 @@ foreach ($col in $collections) {
         }
       }
 
+      if ($action -match 'Allow' -and $isBroad -and -not $isAdmin) {
+        $broadPrincipalSeverity = $null
+        if ($localNtfsRight -in @('Write','Modify','Full') -or $shareWritable) {
+          $broadPrincipalSeverity = 'High'
+        } elseif ($pathLocationRisk -or $wildcardAssessment) {
+          $broadPrincipalSeverity = 'Medium'
+        } elseif ($condText -match '^\\\\' -and -not $TestSharePermissions) {
+          $broadPrincipalSeverity = 'Medium'
+          $rec += "Verify share and NTFS ACLs with -TestSharePermissions before treating the rule as safe."
+        }
+
+        if ($broadPrincipalSeverity) {
+          $reasons += "Principal is broad (Everyone/Authenticated Users/Users)"
+          $rec     += "Restrict the principal to a minimal, purpose-built group."
+          $score = [Math]::Max($score, $SeverityScore[$broadPrincipalSeverity])
+        } elseif ($localNtfsRight -in @('None','Read')) {
+          Write-Verbose "Skipping broad principal finding for '$($r.Name)' because '$aclCheckTarget' is not writable by broad principals (NTFS: $localNtfsRight)."
+        }
+      }
+
     } elseif ($r.Conditions.FilePublisherCondition) {
       $condType = 'Publisher'
       $c = $r.Conditions.FilePublisherCondition
@@ -1499,6 +1754,14 @@ foreach ($col in $collections) {
       $low = if ($range) { $range.LowSection; if (-not $low) { $low = $range.Low } }
       $high = if ($range) { $range.HighSection; if (-not $high){ $high= $range.High } }
       $condText = "Publisher='$publisher'; Product='$product'; Binary='$binary'; VersionRange=[$low,$high]"
+
+      if ($action -match 'Allow') {
+        $shadowingRule = Get-ShadowingRuleInfo -Rule $r -CollectionRules $allRules
+        if ($shadowingRule) {
+          Write-Verbose "Skipping findings for allow rule '$($r.Name)' because deny rule '$($shadowingRule.RuleName)' ($($shadowingRule.RuleType)) for '$($shadowingRule.Principal)' shadows it."
+          continue
+        }
+      }
 
       if ($action -match 'Allow') {
         if (-not $publisher -or $publisher -eq '*') {
@@ -1549,6 +1812,13 @@ foreach ($col in $collections) {
       $hashObjs = @($r.Conditions.FileHashCondition.FileHash)
       $hashList = if ($hashObjs) { ($hashObjs | ForEach-Object { $_.InputFileName }) -join '; ' } else { '<no-hash-names>' }
       $condText = "Hashes: $hashList"
+      if ($action -match 'Allow') {
+        $shadowingRule = Get-ShadowingRuleInfo -Rule $r -CollectionRules $allRules
+        if ($shadowingRule) {
+          Write-Verbose "Skipping findings for allow rule '$($r.Name)' because deny rule '$($shadowingRule.RuleName)' ($($shadowingRule.RuleType)) for '$($shadowingRule.Principal)' shadows it."
+          continue
+        }
+      }
       if ($action -match 'Allow' -and (Test-BroadPrincipal $principal) -and -not (Test-AdminPrincipal $principal)) {
         $results.Add( (New-Finding -Severity 'Low' -Props @{
           Collection=$colType
