@@ -44,14 +44,18 @@ _p.s.: If you want to try it out, DM me for a discount code_
   - Flags `NotConfigured` and `AuditOnly` collections (EXE, DLL, Script, MSI, Packaged app).
 - **Rule risk detection**
   - Broad principals: **Everyone / Authenticated Users / BUILTIN\Users**.
-  - Overly broad **path** rules (drive roots, user-writable trees, wildcards, UNC).
+  - Overly broad **path** rules (drive roots, user-writable trees, risky wildcards, UNC).
   - **Publisher** rules allowing *any product/binary* or with *no upper version bound*.
   - **Hash** rules assigned to broad principals.
 - **Real-world permission validation**
-  - **Local NTFS** rights checked with `Get-Acl` on referenced paths.
+  - **Local NTFS** rights checked with `Get-Acl` on referenced paths or the nearest concrete base directory for wildcard rules.
   - **UNC** paths: optional **share ACL** read (CIM/WMI via `Get-SmbShareAccess` or `Win32_LogicalShareSecuritySetting`) plus **NTFS** on the UNC target itself.
 - **Smarter severity**
+  - Simple AppLocker directory rules such as `C:\SomeFolder\*` are treated as normal syntax, not risky wildcard abuse by default.
   - Broad principal + **protected, read-only locations** (e.g., `Program Files`, `Windows` but **not** `Windows\Temp`) are downgraded to **Info** to avoid false positives.
+  - Missing local paths no longer generate standalone findings; the script logs those checks only with `-Verbose`.
+- **Rule collision suppression**
+  - Findings for **Allow** rules are suppressed when a same-collection **Deny** rule for the same or broader principal clearly shadows the allow rule.
 - **Actionable findings**
   - Structured output with **Severity, Reason, Recommendation**, tied to the exact **Rule/Condition**.
 
@@ -123,7 +127,7 @@ Invoke-AppLockerInspector -Path .\applocker.xml -AsJson | Out-File .\findings.js
 |     High | EXE        | FilePathRule      |  Allow | Everyone            | Temp EXEs                   | Path          | `C:\Users\*\AppData\Local\Temp\*.exe`                                                | User profile/AppData is writable; Principal is broad; Wildcard extension pattern (`*.exe`).                       | Avoid user-writable paths; replace with Publisher/Hash rules limited to required binaries.                            |
 |     High | DLL        | (collection)      |   n/a  | n/a                 | n/a                         | n/a           | n/a                                                                                  | Collection 'DLL' is NotConfigured → default-allow for this type.                                                  | Set EnforcementMode=`Enabled` for DLL (or `AuditOnly` during pilot).                                                  |
 |     High | EXE        | FilePathRule      |  Allow | Authenticated Users | Corp Share Tools            | Path          | `\\filesrv01\tools\updater.exe`                                                      | Share ACL on `\\filesrv01\tools` grants Change/Full to broad principals.                                          | Tighten SMB share ACL; remove Change/Full for broad groups; restrict to a minimal, purpose-built group.               |
-|   Medium | Script     | FilePathRule      |  Allow | Authenticated Users | Org Scripts                 | Path          | `\\filesrv01\scripts\*.ps1`                                                          | Wildcard path; parent `\\filesrv01\scripts` NTFS grants Modify to broad principals.                               | Avoid wildcard allows on writable trees; constrain by exact files or trusted publisher and harden NTFS on the parent. |
+|   Medium | Script     | FilePathRule      |  Allow | Authenticated Users | Org Scripts                 | Path          | `\\filesrv01\scripts\*.ps1`                                                          | Wildcard path; base path `\\filesrv01\scripts` grants Modify to broad principals.                                 | Avoid wildcard allows on writable trees; constrain by exact files or trusted publisher and harden NTFS on the base path. |
 |   Medium | EXE        | FilePublisherRule |  Allow | Authenticated Users | Vendor Any                  | Publisher     | `Publisher='O=Contoso, L=Redmond'; Product='*'; Binary='*'; VersionRange=[1.0.*, *]` | Any product and any binary from the publisher are allowed; No upper version bound; Principal is broad.            | Constrain to specific Product/Binary and set an upper version bound; reduce principal scope.                          |
 |     Info | Script     | FilePathRule      |  Allow | Everyone            | CreateTeamsFirewallRule.ps1 | Path          | `C:\Program Files\Acme\Scripts\CreateTeamsFirewallRule.ps1`                          | Broad principal allowed, but target is in a protected location and not writable by broad principals (NTFS: Read). | No change needed if file remains locked down; consider Publisher/Hash for defense-in-depth.                           |
 
@@ -136,7 +140,7 @@ Invoke-AppLockerInspector -Path .\applocker.xml -AsJson | Out-File .\findings.js
 - Execution allowed from user-writable areas, drive roots, or unsafe wildcards.
 
 ### Medium
-- Wildcards with a **parent directory** that’s writable by broad groups.
+- Risky wildcard patterns or wildcard base paths that are writable by broad groups.
 - Publisher rules too broad (e.g., `Product='*'` and `Binary='*'`; no upper version).
 
 ### Low
@@ -149,7 +153,9 @@ Invoke-AppLockerInspector -Path .\applocker.xml -AsJson | Out-File .\findings.js
 
 - Group evaluation is **heuristic** (focus on broad groups like `Everyone`, `Authenticated Users`, `BUILTIN\Users`).
 - **Nested AD group** expansion is not performed.
-- Wildcard path NTFS checks use a **parent-directory heuristic** (best effort).
+- Wildcard path NTFS checks use the **nearest concrete base directory** that can be resolved on the analysis host.
+- Rule collision detection is intentionally **conservative** and currently covers obvious same-collection overlaps for path, publisher, and hash rules.
+- The script does **not** emulate the full AppLocker runtime decision engine; a reported allow rule means the XML contains that rule, not that endpoint execution was independently verified.
 - Remote share ACL reads depend on **CIM/WMI/SMB** availability, firewall, and permissions.
 - Symlink/junction/hardlink abuse checks are **not yet implemented**.
 - Event log correlation (AppLocker `800x/802x`) is **not yet implemented**.
