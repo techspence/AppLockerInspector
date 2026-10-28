@@ -104,6 +104,9 @@ Invoke-AppLockerInspector -Path .\applocker.xml -TestSharePermissions
 Invoke-AppLockerInspector -Path .\applocker.xml -TestSharePermissions -Credential (Get-Credential)
 
 # Export findings
+# HTML report from the local effective policy
+Invoke-AppLockerInspector -OutHtml C:\temp\applocker-inspector-report.html
+
 # CSV
 Invoke-AppLockerInspector -Path .\applocker.xml -OutCsv .\findings.csv
 
@@ -119,6 +122,7 @@ Invoke-AppLockerInspector -Path .\applocker.xml -AsJson | Out-File .\findings.js
 | `Credential` | `PSCredential` | Credentials for remote share ACL queries when `-TestSharePermissions` is used. |
 | `AsJson`     | `switch` | Output findings as JSON. |
 | `OutCsv`     | `string` | Export findings to CSV. |
+| `OutHtml`    | `string` | Save an HTML report to the specified path. |
 
 ## Example output
 
